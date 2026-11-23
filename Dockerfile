@@ -10,7 +10,7 @@ WORKDIR /app
 
 ARG NPM_REGISTRY=https://registry.npmjs.org
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund --omit=optional --registry=${NPM_REGISTRY}
+RUN npm ci --no-audit --no-fund --registry=${NPM_REGISTRY}
 
 COPY . .
 RUN npm run build
@@ -26,7 +26,6 @@ ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=4747 \
     AGENT_PARTY_DATA_DIR=/data \
-    AGENT_PARTY_ADMIN_KEY="" \
     PUBLIC_URL="" \
     AUTO_IMPORT_CODEX_PETS=0
 
