@@ -48,8 +48,16 @@ const adminKey = loadOrCreateAdminKey();
 const pokemon = new PokemonService(dataDir);
 const pets = new PetRegistry(dataDir, undefined, pokemon, join(rootDir, 'assets', 'default-pets'));
 const store = new PartyStore({ dataDir, pets });
-const worldSync = new WorldSync(store.toSnapshot());
-worldSync.start(100);
+const worldSync = new WorldSync(store.toSnapshot(), {
+  initialLeaderboard: store.getArenaLeaderboard(),
+  onArenaResult: (wId, wName, lId, lName, now) => {
+    store.recordArenaResult(wId, wName, lId, lName, now);
+  },
+  onArenaLeaderboardReset: (now) => {
+    store.ensureArenaLeaderboardFresh(now);
+  },
+});
+worldSync.start(250);
 
 const sseClients = new Set<http.ServerResponse>();
 
@@ -58,19 +66,33 @@ function writeSse(res: http.ServerResponse, event: string, data: unknown): void 
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
+function broadcastSse(event: string, data: unknown, droppable = false): void {
+  if (!sseClients.size) return;
+  const chunk = Buffer.from(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`, 'utf8');
+  for (const res of sseClients) {
+    if (res.writableEnded || res.destroyed) {
+      sseClients.delete(res);
+      continue;
+    }
+    if (droppable && (res.writableNeedDrain || res.writableLength > 65_536)) {
+      continue;
+    }
+    res.write(chunk);
+  }
+}
+
 function broadcastSnapshot(): void {
   const snap = store.toSnapshot();
   worldSync.applySnapshot(snap);
-  for (const res of sseClients) writeSse(res, 'snapshot', snap);
+  broadcastSse('snapshot', snap, false);
 }
 
 store.onChange(() => {
   broadcastSnapshot();
 });
 
-worldSync.onFrame((frame) => {
-  if (!sseClients.size) return;
-  for (const res of sseClients) writeSse(res, 'world', frame);
+worldSync.onArena((ev) => {
+  broadcastSse('arena', ev, true);
 });
 
 const sweepTimer = setInterval(() => {
@@ -200,7 +222,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     return true;
   }
 
-  // ---- SSE Stream (Snapshot + 10Hz WorldSync)
+  // ---- SSE Stream (Snapshot + Event-Driven Arena Sync)
   if (method === 'GET' && p === '/api/stream') {
     res.writeHead(200, corsHeaders({
       'Content-Type': 'text/event-stream; charset=utf-8',
@@ -212,7 +234,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     sseClients.add(res);
     req.on('close', () => sseClients.delete(res));
     writeSse(res, 'snapshot', store.toSnapshot());
-    writeSse(res, 'world', worldSync.getFrame());
+    writeSse(res, 'arena', worldSync.getArenaEvent());
     return true;
   }
 
@@ -287,7 +309,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     }
     res.writeHead(200, corsHeaders({
       'Content-Type': 'image/png',
-      'Cache-Control': 'public, max-age=86400',
+      'Cache-Control': 'public, max-age=604800, immutable',
     }));
     createReadStream(filePath).pipe(res);
     return true;
@@ -310,7 +332,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     }
     res.writeHead(200, corsHeaders({
       'Content-Type': file.contentType,
-      'Cache-Control': 'public, max-age=3600',
+      'Cache-Control': 'public, max-age=604800, immutable',
     }));
     createReadStream(file.filePath).pipe(res);
     return true;
@@ -430,7 +452,16 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     }
 
     if ((method === 'PUT' || method === 'PATCH') && p === '/api/admin/settings') {
-      const body = await readJson<{ publicUrl?: string | null; receptionSign?: string | null }>(req);
+      const body = await readJson<{
+        publicUrl?: string | null;
+        receptionSign?: string | null;
+        officeSettings?: Record<string, unknown>;
+        theme?: unknown;
+        daylight?: unknown;
+        liveliness?: unknown;
+        bubbles?: unknown;
+        showNames?: unknown;
+      }>(req);
       if ('publicUrl' in body) {
         const r = store.setPublicUrl(body.publicUrl);
         if (!r.ok) {
@@ -441,11 +472,20 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       if ('receptionSign' in body) {
         store.setReceptionSign(body.receptionSign);
       }
+      const officePatch: Record<string, unknown> =
+        body.officeSettings && typeof body.officeSettings === 'object' ? { ...body.officeSettings } : {};
+      for (const k of ['theme', 'daylight', 'liveliness', 'bubbles', 'showNames'] as const) {
+        if (k in body) officePatch[k] = body[k];
+      }
+      if (Object.keys(officePatch).length > 0) {
+        store.setOfficeSettings(officePatch);
+      }
       sendJson(res, 200, {
         ok: true,
         publicUrl: store.getPublicUrl() ?? '',
         effectiveBaseUrl: getBaseUrl(req),
         receptionSign: store.getReceptionSign(),
+        officeSettings: store.getOfficeSettings(),
       });
       return true;
     }
@@ -497,6 +537,12 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       const id = decodeURIComponent(npcMatch[1]);
       const ok = store.deleteNpc(id);
       sendJson(res, ok ? 200 : 404, ok ? { ok: true } : { error: 'NPC not found' });
+      return true;
+    }
+
+    if (method === 'POST' && p === '/api/admin/arena/start') {
+      const r = worldSync.triggerArenaDuel();
+      sendJson(res, r.ok ? 200 : 400, r);
       return true;
     }
 

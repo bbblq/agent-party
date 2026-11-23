@@ -54,8 +54,8 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
   let options: WorldOptions = { ...DEFAULT_WORLD_OPTIONS };
   const visitMode = !!o.visit;
   const camera = new Camera();
-  // Simulação e desenho são recriados quando o timelapse entra, pula ou sai (rebuild).
-  let sim = new Sim(art, () => options, undefined, { visit: visitMode, synced: !visitMode && !store.mock });
+  // 浏览器本地 60fps 流畅演播（synced: false），服务端仅按状态变更与决斗事件低频推送。
+  let sim = new Sim(art, () => options, undefined, { visit: visitMode, synced: false });
   let renderer = new Renderer(canvas, art, sim, camera);
   let overlay = new Overlay(renderer.ctx, sim, renderer, camera);
   let assets: WorldAssets | null = null;
@@ -253,16 +253,21 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
       // No timelapse, os horários do snapshot vão para o relógio do mundo (world/playback.ts).
       if (playback) sim.applySnapshot(rebaseSnapshot(snap, worldNow - snap.serverTime), worldNow);
       else sim.applySnapshot(snap, Date.now());
+      if (!playback && !visitMode && store.lastArenaEvent) {
+        sim.arena.applyRemoteArenaEvent(store.lastArenaEvent, Date.now());
+      }
     } catch (err) {
       console.error('[mundo] snapshot inválido ignorado', err);
     }
   };
   const offSnapshot = store.on('snapshot', onSnapshot);
   if (store.snapshot) onSnapshot();
-  const offWorld = store.on('world', (frame) => {
-    if (!playback) sim.applyWorldFrame(frame, Date.now());
+  const offArena = store.on('arena', (ev) => {
+    if (!playback && !visitMode) sim.arena.applyRemoteArenaEvent(ev, Date.now());
   });
-  if (store.lastWorldFrame && !playback) sim.applyWorldFrame(store.lastWorldFrame, Date.now());
+  if (store.lastArenaEvent && !playback && !visitMode) {
+    sim.arena.applyRemoteArenaEvent(store.lastArenaEvent, Date.now());
+  }
 
   void loadWorldAssets(abort.signal).then((a) => {
     if (!a) return;
@@ -472,7 +477,7 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
       cancelAnimationFrame(raf);
       abort.abort();
       offSnapshot();
-      offWorld();
+      offArena();
       detachInput();
       window.removeEventListener('resize', resize);
       canvas.removeEventListener('contextmenu', onContextMenu);

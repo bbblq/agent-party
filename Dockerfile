@@ -23,6 +23,7 @@ FROM node:24-alpine AS runtime
 RUN apk add --no-cache curl
 
 ENV NODE_ENV=production \
+    TZ=Asia/Shanghai \
     HOST=0.0.0.0 \
     PORT=4747 \
     AGENT_PARTY_DATA_DIR=/data \

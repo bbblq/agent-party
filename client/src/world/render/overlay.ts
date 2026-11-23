@@ -12,6 +12,7 @@ import type { Character } from '../sim/character';
 import { shellAgeKey, shellBubbleAlpha, shellBubbleText, STORM_LIFT, unitHash } from '../sim/shell';
 import type { Sim } from '../sim/sim';
 import { buildAnim } from './anim';
+import { drawArenaOverlay } from './arena-render';
 import { drawFxBanner } from './github-fx';
 import type { HeadInfo, Renderer } from './renderer';
 import { tr } from '../../../../shared/i18n';
@@ -305,6 +306,7 @@ export class Overlay {
 
     // placas e pílulas primeiro: são fixas e grandes; balões e etiquetas desviam delas
     this.drawRoomTexts(now, zoom);
+    drawArenaOverlay(this.ctx, this.sim, this.camera, now, (x, y, w, h) => this.place(x, y, w, h));
     this.drawFxBanners(now, zoom);
 
     // ---- coleta balões e etiquetas dos personagens visíveis

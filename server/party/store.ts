@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AppearanceParts } from '../../shared/appearance';
+import { beijingHourBucket } from '../../shared/beijing';
 import { hash32 } from '../../shared/hash';
-import type { Activity, AgentInfo, AgentStatus, OfficeSnapshot, RoomInfo } from '../../shared/types';
+import type { Activity, AgentInfo, AgentStatus, ArenaLeaderboardEntry, OfficeGlobalSettings, OfficeSnapshot, RoomInfo } from '../../shared/types';
 import type { PetRegistry } from './pets';
 import { sanitizePetId } from './pets';
 
@@ -45,9 +46,45 @@ export interface BanRecord {
 
 export const DEFAULT_RECEPTION_SIGN = 'Agent Party';
 
+export const DEFAULT_OFFICE_SETTINGS: OfficeGlobalSettings = {
+  theme: 'auto',
+  daylight: 'auto',
+  liveliness: 'lively',
+  bubbles: 'important',
+  showNames: true,
+};
+
 export interface SiteSettings {
   publicUrl?: string;
   receptionSign?: string;
+  officeSettings?: Partial<OfficeGlobalSettings>;
+}
+
+const VALID_THEMES = new Set<OfficeGlobalSettings['theme']>(['auto', 'none', 'christmas', 'halloween']);
+const VALID_DAYLIGHT = new Set<OfficeGlobalSettings['daylight']>(['auto', 'day', 'night']);
+const VALID_LIVELINESS = new Set<OfficeGlobalSettings['liveliness']>(['calm', 'normal', 'lively']);
+const VALID_BUBBLES = new Set<OfficeGlobalSettings['bubbles']>(['all', 'important', 'none']);
+
+export function sanitizeOfficeSettings(
+  raw: unknown,
+  base: OfficeGlobalSettings = DEFAULT_OFFICE_SETTINGS,
+): OfficeGlobalSettings {
+  const o = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  return {
+    theme: VALID_THEMES.has(o.theme as OfficeGlobalSettings['theme'])
+      ? (o.theme as OfficeGlobalSettings['theme'])
+      : base.theme,
+    daylight: VALID_DAYLIGHT.has(o.daylight as OfficeGlobalSettings['daylight'])
+      ? (o.daylight as OfficeGlobalSettings['daylight'])
+      : base.daylight,
+    liveliness: VALID_LIVELINESS.has(o.liveliness as OfficeGlobalSettings['liveliness'])
+      ? (o.liveliness as OfficeGlobalSettings['liveliness'])
+      : base.liveliness,
+    bubbles: VALID_BUBBLES.has(o.bubbles as OfficeGlobalSettings['bubbles'])
+      ? (o.bubbles as OfficeGlobalSettings['bubbles'])
+      : base.bubbles,
+    showNames: typeof o.showNames === 'boolean' ? o.showNames : base.showNames,
+  };
 }
 
 interface PersistedState {
@@ -55,6 +92,8 @@ interface PersistedState {
   members: MemberRecord[];
   banned: BanRecord[];
   settings?: SiteSettings;
+  arenaLeaderboard?: ArenaLeaderboardEntry[];
+  arenaLeaderboardHour?: number;
 }
 
 export function normalizePublicUrl(raw: unknown): { ok: true; value: string | undefined } | { ok: false; error: string } {
@@ -140,10 +179,13 @@ export class PartyStore {
   private readonly pets: PetRegistry;
   private readonly members = new Map<string, MemberRecord>();
   private readonly banned = new Map<string, BanRecord>();
+  private readonly arenaStats = new Map<string, ArenaLeaderboardEntry>();
+  private arenaLeaderboardHour = beijingHourBucket();
   private readonly listeners = new Set<() => void>();
   private readonly startedAt = Date.now();
   private publicUrl: string | undefined;
   private receptionSign: string | undefined;
+  private officeSettings: OfficeGlobalSettings = { ...DEFAULT_OFFICE_SETTINGS };
   private rev = 1;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private dirty = false;
@@ -203,6 +245,25 @@ export class PartyStore {
       if (raw.settings && typeof raw.settings.receptionSign === 'string') {
         this.receptionSign = cleanText(raw.settings.receptionSign, 28);
       }
+      if (raw.settings && raw.settings.officeSettings) {
+        this.officeSettings = sanitizeOfficeSettings(raw.settings.officeSettings, DEFAULT_OFFICE_SETTINGS);
+      }
+      const currentHour = beijingHourBucket();
+      this.arenaLeaderboardHour =
+        typeof raw.arenaLeaderboardHour === 'number' && Number.isFinite(raw.arenaLeaderboardHour)
+          ? raw.arenaLeaderboardHour
+          : currentHour;
+      if (Array.isArray(raw.arenaLeaderboard) && this.arenaLeaderboardHour === currentHour) {
+        for (const e of raw.arenaLeaderboard) {
+          if (!e || typeof e.id !== 'string' || !e.id.trim()) continue;
+          const wins = typeof e.wins === 'number' && Number.isFinite(e.wins) ? Math.max(0, Math.floor(e.wins)) : 0;
+          const losses = typeof e.losses === 'number' && Number.isFinite(e.losses) ? Math.max(0, Math.floor(e.losses)) : 0;
+          const name = cleanText(e.name, 32) ?? e.id;
+          this.arenaStats.set(e.id, { id: e.id, name, wins, losses });
+        }
+      } else {
+        this.arenaLeaderboardHour = currentHour;
+      }
     } catch (err) {
       console.warn('[store] failed to load state.json, starting fresh', err);
     }
@@ -227,12 +288,15 @@ export class PartyStore {
     const settings: SiteSettings = {
       ...(this.publicUrl ? { publicUrl: this.publicUrl } : {}),
       ...(this.receptionSign ? { receptionSign: this.receptionSign } : {}),
+      officeSettings: { ...this.officeSettings },
     };
+    const arenaLeaderboard = this.getArenaLeaderboard();
     const payload: PersistedState = {
       version: 1,
       members: [...this.members.values()],
       banned: [...this.banned.values()],
       ...(Object.keys(settings).length ? { settings } : {}),
+      ...(arenaLeaderboard.length ? { arenaLeaderboard, arenaLeaderboardHour: this.arenaLeaderboardHour } : {}),
     };
     const tmp = `${this.statePath}.tmp`;
     writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8');
@@ -764,11 +828,65 @@ export class PartyStore {
     return this.receptionSign || DEFAULT_RECEPTION_SIGN;
   }
 
+  ensureArenaLeaderboardFresh(now = Date.now()): boolean {
+    const bucket = beijingHourBucket(now);
+    if (this.arenaLeaderboardHour === bucket) return false;
+    this.arenaLeaderboardHour = bucket;
+    if (this.arenaStats.size > 0) {
+      this.arenaStats.clear();
+      this.scheduleSave();
+      return true;
+    }
+    return false;
+  }
+
+  getArenaLeaderboard(now = Date.now()): ArenaLeaderboardEntry[] {
+    this.ensureArenaLeaderboardFresh(now);
+    return [...this.arenaStats.values()].sort(
+      (a, b) => b.wins - a.wins || a.losses - b.losses || a.name.localeCompare(b.name, 'zh-CN'),
+    );
+  }
+
+  recordArenaResult(winnerId: string, winnerName: string, loserId: string, loserName: string, now = Date.now()): ArenaLeaderboardEntry[] {
+    this.ensureArenaLeaderboardFresh(now);
+    const cleanW = cleanText(winnerId, 64);
+    const cleanL = cleanText(loserId, 64);
+    if (cleanW && cleanL && cleanW !== cleanL) {
+      const wPrev = this.arenaStats.get(cleanW);
+      this.arenaStats.set(cleanW, {
+        id: cleanW,
+        name: cleanText(winnerName, 32) ?? wPrev?.name ?? cleanW,
+        wins: (wPrev?.wins ?? 0) + 1,
+        losses: wPrev?.losses ?? 0,
+      });
+      const lPrev = this.arenaStats.get(cleanL);
+      this.arenaStats.set(cleanL, {
+        id: cleanL,
+        name: cleanText(loserName, 32) ?? lPrev?.name ?? cleanL,
+        wins: lPrev?.wins ?? 0,
+        losses: (lPrev?.losses ?? 0) + 1,
+      });
+      this.scheduleSave();
+    }
+    return this.getArenaLeaderboard(now);
+  }
+
   setReceptionSign(raw: unknown): { ok: true; receptionSign: string } {
     this.receptionSign = cleanText(raw, 28);
     this.emit();
     this.flush();
     return { ok: true, receptionSign: this.getReceptionSign() };
+  }
+
+  getOfficeSettings(): OfficeGlobalSettings {
+    return { ...this.officeSettings };
+  }
+
+  setOfficeSettings(patch: unknown): OfficeGlobalSettings {
+    this.officeSettings = sanitizeOfficeSettings(patch, this.officeSettings);
+    this.emit();
+    this.flush();
+    return this.getOfficeSettings();
   }
 
   getAdminState() {
@@ -788,6 +906,7 @@ export class PartyStore {
         publicUrl: this.publicUrl ?? '',
         receptionSign: this.receptionSign ?? '',
         effectiveReceptionSign: this.getReceptionSign(),
+        officeSettings: this.getOfficeSettings(),
       },
     };
   }
@@ -870,6 +989,7 @@ export class PartyStore {
         startedAt: this.startedAt,
         version,
         receptionSign: this.getReceptionSign(),
+        officeSettings: this.getOfficeSettings(),
         terminal: false,
       },
     };

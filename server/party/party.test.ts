@@ -3,18 +3,22 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Appearance, ArtModule, RoomTheme } from '../../client/src/art/api';
+import { beijingHourBucket, beijingParts } from '../../shared/beijing';
 import { getLocale, setLocale, tr } from '../../shared/i18n';
-import { DEFAULT_WORLD_OPTIONS } from '../../client/src/world/api';
+import { DEFAULT_WORLD_OPTIONS, seasonalThemeFor } from '../../client/src/world/api';
+import { effectiveHour } from '../../client/src/world/render/daylight';
 import { groupRooms } from '../../client/src/ui/model';
 import type { SpotDef } from '../../client/src/world/layout/types';
 import { chooseSeat, lacksBackView } from '../../client/src/world/sim/behavior';
+import { DUEL_DURATION_MS, isPokemonPet } from '../../client/src/world/sim/arena';
+import { slotAt } from '../../client/src/world/layout/geometry';
 import { canEditCharacter } from '../../client/src/ui/character-model';
 import { pmdAnimForPose, resolveCodexFrame } from '../../client/src/world/render/pet-sprites';
 import { Sim } from '../../client/src/world/sim/sim';
 import { parseBoundary, parseMultipart } from './multipart';
 import { normalizeCodexSpec, PetRegistry, readSpriteDimensions, sanitizePetId } from './pets';
 import { findPokemon, parseAnimDataXml, searchPokemon } from './pokemon';
-import { DEFAULT_RECEPTION_SIGN, formatCompanionName, normalizePublicUrl, PartyStore } from './store';
+import { DEFAULT_OFFICE_SETTINGS, DEFAULT_RECEPTION_SIGN, formatCompanionName, normalizePublicUrl, PartyStore } from './store';
 import { renderReportScript, renderWatchScript } from './client-scripts';
 import { renderSetupMarkdown } from './setup-page';
 import { WorldSync } from './world-sync';
@@ -440,6 +444,31 @@ describe('Codex V2 & PMD directional sprite resolution', () => {
     expect(nineRow.row).toBe(7);
     expect(nineRow.row).toBeLessThan(9);
 
+    expect(
+      resolveCodexFrame({
+        pose: 'stand',
+        dir: 'right',
+        mode: 'idle',
+        animT: 0,
+        lastHorizDir: 'right',
+        states: defaultStates,
+        actualRows: 9,
+        actualCols: 8,
+      }),
+    ).toEqual({ row: 1, col: 0, flipX: false, offsetY: 0 });
+    expect(
+      resolveCodexFrame({
+        pose: 'stand',
+        dir: 'left',
+        mode: 'idle',
+        animT: 0,
+        lastHorizDir: 'left',
+        states: defaultStates,
+        actualRows: 9,
+        actualCols: 8,
+      }),
+    ).toEqual({ row: 2, col: 0, flipX: false, offsetY: 0 });
+
     const pmd = {
       dex: '0025',
       walk: { url: '/walk.png', frameWidth: 32, frameHeight: 32, frames: 4, rows: 8, durations: [120] },
@@ -699,5 +728,186 @@ describe('Companion pet onboarding & industrial setup scripts', () => {
     const topIds = groups.flatMap((g) => g.nodes).map((n) => n.agent.id);
     expect(topIds).not.toContain('bbbliqi:pet');
     expect(ownerNode?.subs.map((s) => s.id)).toEqual(['bbbliqi:pet']);
+  });
+});
+
+describe('Pokémon Duel Arena layout, lifecycle & leaderboard persistence', () => {
+  it('classifies Pokémon vs humans and non-Pokémon pets cleanly', () => {
+    expect(isPokemonPet(undefined)).toBe(false);
+    expect(isPokemonPet({ id: 'dafeiyu', kind: 'codex-v2', spriteUrl: '/x.png' })).toBe(false);
+    expect(isPokemonPet({ id: 'psyduck-3d', kind: 'codex-v2', spriteUrl: '/x.webp' })).toBe(true);
+    expect(isPokemonPet({ id: 'snorlax', kind: 'codex-v2', spriteUrl: '/x.webp' })).toBe(true);
+    expect(isPokemonPet({ id: 'pmd:0006', kind: 'pmd', spriteUrl: '/x.png' })).toBe(true);
+  });
+
+  it('places bottom-right core:arena without colliding with 1..4 project rooms', () => {
+    for (const roomCount of [1, 2, 3, 4]) {
+      const dir = makeTempDir();
+      const pets = new PetRegistry(dir, null, null, join(process.cwd(), 'assets', 'default-pets'));
+      const store = new PartyStore({ dataDir: dir, pets });
+      for (let i = 0; i < roomCount * 6; i++) {
+        store.report({ id: `m-${i}`, name: `成员${i}`, status: 'working' });
+      }
+      const sim = new Sim(stubArt, () => DEFAULT_WORLD_OPTIONS, null);
+      sim.applySnapshot(store.toSnapshot(1_700_000_000_000), 1_700_000_000_000);
+      const arena = sim.building.arena;
+      expect(arena.id).toBe('core:arena');
+      expect(arena.spots.filter((s) => s.kind === 'arena_fight')).toHaveLength(2);
+      expect(arena.spots.filter((s) => s.kind === 'arena_watch')).toHaveLength(6);
+
+      const arenaSlot = slotAt(sim.building.cols - 1, 'south');
+      for (const rs of sim.rooms.values()) {
+        expect(rs.slot).not.toBe(arenaSlot);
+        expect(rs.layout.rect.x !== arena.rect.x || rs.layout.rect.y !== arena.rect.y).toBe(true);
+      }
+    }
+  });
+
+  it('runs a 60s Pokémon-only duel with spectators and persists leaderboard', () => {
+    const dir = makeTempDir();
+    const pets = new PetRegistry(dir, null, null, join(process.cwd(), 'assets', 'default-pets'));
+    const store = new PartyStore({ dataDir: dir, pets });
+
+    const t0 = Math.floor(Date.now() / 3_600_000) * 3_600_000 + 60_000;
+    store.report({ id: 'p-psy', name: '可达鸭选手', status: 'idle', petId: 'psyduck-3d' }, t0);
+    store.report({ id: 'p-sno', name: '卡比兽选手', status: 'idle', petId: 'snorlax' }, t0);
+    store.report({ id: 'p-fish', name: '大肥鱼观众', status: 'idle', petId: 'dafeiyu' }, t0);
+    store.report({ id: 'p-human', name: '程序员小明', status: 'idle' }, t0);
+
+    const sim = new Sim(stubArt, () => ({ ...DEFAULT_WORLD_OPTIONS, liveliness: 'lively' }), null);
+    sim.arena.onResult = (wId, wName, lId, lName, at) => {
+      store.recordArenaResult(wId, wName, lId, lName, at);
+    };
+    sim.arena.onLeaderboardReset = (at) => {
+      store.ensureArenaLeaderboardFresh(at);
+    };
+    sim.applySnapshot(store.toSnapshot(t0), t0);
+
+    const res = sim.arena.triggerNow(t0 + 100);
+    expect(res.ok).toBe(true);
+    expect(sim.arena.state.phase).toBe('gather');
+    expect([sim.arena.state.leftId, sim.arena.state.rightId].sort()).toEqual(['p-psy', 'p-sno']);
+    expect(sim.arena.state.watchers.length).toBeGreaterThanOrEqual(1);
+    expect(sim.arena.state.watchers).not.toContain('p-psy');
+    expect(sim.arena.state.watchers).not.toContain('p-sno');
+
+    // Step until fight begins
+    let now = t0 + 100;
+    for (let i = 0; i < 200 && sim.arena.state.phase === 'gather'; i++) {
+      now += 150;
+      sim.update(0.15, now);
+    }
+    expect(sim.arena.state.phase).toBe('fight');
+    expect(sim.arena.state.endsAt - sim.arena.state.startedAt).toBe(DUEL_DURATION_MS);
+
+    // Step across the 60s duel duration and verify FX + finish
+    let sawFx = false;
+    while (sim.arena.state.phase === 'fight' && now < sim.arena.state.endsAt + 1000) {
+      now += 500;
+      sim.update(0.25, now);
+      if (sim.arena.state.fx) sawFx = true;
+    }
+    expect(sawFx).toBe(true);
+    expect(sim.arena.state.phase).toBe('finish');
+    expect(sim.arena.state.winnerId).toBeTruthy();
+    expect(Math.min(sim.arena.state.leftHp, sim.arena.state.rightHp)).toBe(0);
+
+    store.flush();
+    const reloaded = new PartyStore({ dataDir: dir, pets });
+    const lb = reloaded.getArenaLeaderboard();
+    expect(lb).toHaveLength(2);
+    expect(lb[0].wins).toBe(1);
+    expect(lb[1].losses).toBe(1);
+
+    // Finish phase -> idle schedules nextDuelAt and syncs it with time offset
+    while (sim.arena.state.phase === 'finish') {
+      now += 1000;
+      sim.update(0.25, now);
+    }
+    expect(sim.arena.state.phase).toBe('idle');
+    const synced = sim.arena.toSyncedState();
+    expect(synced.nextDuelAt).toBeGreaterThan(now);
+
+    const mirror = new Sim(stubArt, () => DEFAULT_WORLD_OPTIONS, null, { synced: true });
+    mirror.arena.applySynced(synced, 5_000);
+    expect(mirror.arena.state.nextDuelAt).toBe(synced.nextDuelAt! + 5_000);
+
+    // Top-of-hour resets live & persisted leaderboard
+    const nextHour = (Math.floor(now / 3_600_000) + 1) * 3_600_000 + 500;
+    sim.update(0.1, nextHour);
+    expect(sim.arena.state.leaderboard).toEqual([]);
+    expect(store.getArenaLeaderboard(nextHour)).toEqual([]);
+  });
+
+  it('uses Beijing Time (UTC+8) consistently across hour buckets, daylight, seasonal themes, and supports officeSettings + event-driven arena sync', () => {
+    // 2026-10-31 15:59:59 UTC = 2026-10-31 23:59:59 Beijing (October -> halloween)
+    // 2026-10-31 16:00:00 UTC = 2026-11-01 00:00:00 Beijing (November -> christmas)
+    const beforeMidnightBj = Date.UTC(2026, 9, 31, 15, 59, 59);
+    const afterMidnightBj = Date.UTC(2026, 9, 31, 16, 0, 0);
+    expect(beijingParts(afterMidnightBj)).toEqual({
+      year: 2026,
+      month: 10,
+      day: 1,
+      hour: 0,
+      minute: 0,
+      second: 0,
+      fractionalHour: 0,
+    });
+    expect(beijingHourBucket(afterMidnightBj) - beijingHourBucket(beforeMidnightBj)).toBe(1);
+    expect(seasonalThemeFor('auto', new Date(beforeMidnightBj))).toBe('halloween');
+    expect(seasonalThemeFor('auto', new Date(afterMidnightBj))).toBe('christmas');
+    expect(effectiveHour('auto', null, new Date(Date.UTC(2026, 5, 1, 4, 30, 0)))).toBeCloseTo(12.5);
+
+    // Office global settings persist across PartyStore reloads and populate snapshot meta
+    const dir = makeTempDir();
+    const pets = new PetRegistry(dir, null, null, join(process.cwd(), 'assets', 'default-pets'));
+    const store = new PartyStore({ dataDir: dir, pets });
+    expect(store.getOfficeSettings()).toEqual(DEFAULT_OFFICE_SETTINGS);
+    store.setOfficeSettings({ theme: 'none', daylight: 'night', liveliness: 'calm', bubbles: 'none', showNames: false });
+    expect(store.toSnapshot().meta.officeSettings).toEqual({
+      theme: 'none',
+      daylight: 'night',
+      liveliness: 'calm',
+      bubbles: 'none',
+      showNames: false,
+    });
+    store.flush();
+    const reloaded = new PartyStore({ dataDir: dir, pets });
+    expect(reloaded.getOfficeSettings()).toEqual({
+      theme: 'none',
+      daylight: 'night',
+      liveliness: 'calm',
+      bubbles: 'none',
+      showNames: false,
+    });
+
+    // Event-driven WorldSync emits arena only when arena changes, driving browser Sim (synced: false)
+    const t0 = Date.UTC(2026, 5, 1, 12, 0, 0);
+    store.report({ id: 'p-psy', name: '可达鸭', status: 'idle', petId: 'psyduck-3d' }, t0);
+    store.report({ id: 'p-sno', name: '卡比兽', status: 'idle', petId: 'snorlax' }, t0);
+    store.report({ id: 'h-1', name: '旁观小明', status: 'idle' }, t0);
+
+    const ws = new WorldSync(store.toSnapshot(t0));
+    const events: ReturnType<WorldSync['getArenaEvent']>[] = [];
+    ws.onArena((ev) => events.push(ev));
+
+    // Stepping without state transition emits 0 arena events
+    ws.step(t0 + 250);
+    const countAfterIdle = events.length;
+    ws.step(t0 + 500);
+    ws.step(t0 + 750);
+    expect(events.length).toBe(countAfterIdle);
+
+    // Triggering a duel emits an arena event
+    const trig = ws.triggerArenaDuel();
+    expect(trig.ok).toBe(true);
+    expect(events.length).toBe(countAfterIdle + 1);
+
+    // Local 60fps browser Sim consumes server arena event without server 10Hz frames
+    const clientSim = new Sim(stubArt, () => DEFAULT_WORLD_OPTIONS, undefined, { synced: false });
+    clientSim.applySnapshot(store.toSnapshot(t0), t0);
+    clientSim.arena.applyRemoteArenaEvent(ws.getArenaEvent(), t0 + 100);
+    expect(clientSim.arena.state.phase).toBe('gather');
+    expect([clientSim.arena.state.leftId, clientSim.arena.state.rightId].sort()).toEqual(['p-psy', 'p-sno']);
   });
 });

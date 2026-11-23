@@ -1,6 +1,7 @@
 // Desenho do mundo por frame: camada externa -> pisos -> paredes/itens de parede -> entidades
 // ordenadas por profundidade -> luz/escuridão -> ícones. A passada em espaço de tela (texto
 // nítido) fica em overlay.ts.
+import { beijingParts } from '../../../../shared/beijing';
 import { TILE, type ArtModule, type CharacterFrameRequest, type IconName, type ScreenMode, type Sprite } from '../../art/api';
 import type { SeasonalTheme, WorldOptions } from '../api';
 import type { WorldAssets } from '../assets';
@@ -15,6 +16,7 @@ import type { RoomState } from '../sim/room-state';
 import { cobwebScale, hourglassIcon, HOURGLASS_FLIP_MS, STORM_LIFT } from '../sim/shell';
 import type { Sim } from '../sim/sim';
 import { buildAnim, furnitureScale, NO_ANIM, sweepDelay, type BuildAnim } from './anim';
+import { drawArenaEffects, drawArenaFloor, drawArenaWallTv, type ArenaFxTracker } from './arena-render';
 import { daylightModeOf, parseHourParam } from './daylight';
 import { RoomFxRenderer } from './github-fx';
 import { Lighting } from './lighting';
@@ -95,6 +97,7 @@ export class Renderer {
   private ents: Ent[] = [];
   private pool: Ent[] = [];
   private date = new Date();
+  private wallClockDate = new Date();
   private icons: { x: number; y: number; name: IconName; bounce: number; alpha: number; badge: number }[] = [];
   /** Pipoca, confete e chuva (pool fixo). */
   readonly particles = new Particles();
@@ -118,6 +121,7 @@ export class Renderer {
   private clearColor = '#7fae62';
   private grass: CanvasPattern | null = null;
   private theme: SeasonalTheme = 'none';
+  private arenaFxTracker: ArenaFxTracker = { lastFxId: 0, lastWinnerMatchId: 0 };
 
   constructor(
     readonly canvas: HTMLCanvasElement,
@@ -194,9 +198,12 @@ export class Renderer {
     for (let x = this.baseX + 4; x < this.baseX + c.width; x += 24) ctx.fillRect(x, ly, 12, 2);
     this.shells = [];
     this.shellWindows = [];
+    const arenaSlot = slotAt(cols - 1, 'south');
     for (let col = CORE_COLS; col < cols; col++) {
       for (const side of ['north', 'south'] as const) {
-        const sh = slotShell(slotAt(col, side), col === cols - 1);
+        const sl = slotAt(col, side);
+        if (sl === arenaSlot) continue;
+        const sh = slotShell(sl, col === cols - 1);
         this.shells.push(sh);
         paintShell(this.art, ctx, sh.floors, sh.walls);
         for (const w of sh.windows) this.shellWindows.push(toWallVis(w, `shell:${sh.slot}`));
@@ -359,10 +366,13 @@ export class Renderer {
       const sh = Math.min(this.base.height - sy, Math.ceil(vy1 - vy0) + 3);
       if (sw > 0 && sh > 0) ctx.drawImage(this.base, sx, sy, sw, sh, this.baseX + sx, this.baseY + sy, sw, sh);
     }
-    // hora do ciclo dia/noite (preferência ou hora forçada; o relógio de parede acompanha a forçada)
+    // hora do ciclo dia/noite (preferência ou hora forçada; o relógio de parede acompanha a hora de Pequim UTC+8)
     if (this.hourOverride !== null) {
       const min = Math.round(this.hourOverride * 60);
-      this.date.setHours(Math.floor(min / 60) % 24, min % 60);
+      this.wallClockDate.setHours(Math.floor(min / 60) % 24, min % 60, 0, 0);
+    } else {
+      const bp = beijingParts(this.date.getTime());
+      this.wallClockDate.setHours(bp.hour, bp.minute, bp.second, 0);
     }
     const hour = this.lighting.update(now, daylightModeOf(opts), this.hourOverride, this.date);
     const t = now;
@@ -383,11 +393,24 @@ export class Renderer {
       const anim = vis.room ? buildAnim(vis.room.phase, vis.room.progress(now)) : NO_ANIM;
       this.drawFloor(vis, anim);
     }
+    const arenaArea = this.sim.building.arena;
+    if (arenaArea) {
+      const ar = arenaArea.rect;
+      if (visible(ar.x * TILE, ar.y * TILE, ar.w * TILE, ar.h * TILE)) {
+        drawArenaFloor(ctx, ar, this.sim.arena.state, now);
+      }
+    }
     for (const vis of this.areas.values()) {
       const p = vis.px;
       if (!visible(p.x, p.y - WALL_MARGIN, p.w, p.h + WALL_MARGIN)) continue;
       const anim = vis.room ? buildAnim(vis.room.phase, vis.room.progress(now)) : NO_ANIM;
       this.drawWalls(vis, anim, now, hour);
+    }
+    if (arenaArea) {
+      const ar = arenaArea.rect;
+      if (visible(ar.x * TILE, ar.y * TILE, ar.w * TILE, ar.h * TILE)) {
+        drawArenaWallTv(ctx, ar, this.sim.arena.state, now);
+      }
     }
     const view = { x0: vx0, y0: vy0, x1: vx1, y1: vy1 };
     // alarme de CI: tom vermelho no piso (por baixo dos móveis e personagens)
@@ -436,17 +459,22 @@ export class Renderer {
       }
       push(K.Char, ch.depth(), ch, null, 1);
     }
+    const arenaSlot = slotAt(this.sim.building.cols - 1, 'south');
     for (const prop of this.exterior.props) {
       if (!visible(prop.x - 24, prop.y - 56, 48, 60)) continue;
       let alpha = 1;
       if (prop.whenRoom !== undefined) {
-        // ex.: cerca viva diante do caminho do jardim — surge junto com a sala
-        const room = this.roomInSlot(prop.whenRoom);
-        if (!room) continue;
-        if (room.phase === 'building' || room.phase === 'dismantling') {
-          const pr = room.progress(now);
-          alpha = room.phase === 'building' ? Math.min(1, pr * 3) : 1 - Math.min(1, Math.max(0, (pr - 0.75) * 4));
-          if (alpha <= 0.02) continue;
+        if (prop.whenRoom === arenaSlot) {
+          alpha = 1;
+        } else {
+          // ex.: cerca viva diante do caminho do jardim — surge junto com a sala
+          const room = this.roomInSlot(prop.whenRoom);
+          if (!room) continue;
+          if (room.phase === 'building' || room.phase === 'dismantling') {
+            const pr = room.progress(now);
+            alpha = room.phase === 'building' ? Math.min(1, pr * 3) : 1 - Math.min(1, Math.max(0, (pr - 0.75) * 4));
+            if (alpha <= 0.02) continue;
+          }
         }
       }
       push(K.Prop, prop.y, prop, null, alpha);
@@ -489,6 +517,7 @@ export class Renderer {
       }
     }
     this.drawPingPong(now);
+    drawArenaEffects(ctx, this.sim, this.particles, now, this.arenaFxTracker);
     // ---- espera de shell: teias de aranha, confete/pipoca/chuva (por cima das entidades)
     this.drawCobwebs(now);
     this.drainEffects(now);
@@ -614,7 +643,7 @@ export class Renderer {
         const o = wallItemOrigin(w, s.base);
         ctx.drawImage(s.base.canvas, o.x, o.y + rise);
         const r = s.base.rects?.face;
-        if (r) this.safe(() => this.art.drawClock(ctx, { x: o.x + r.x, y: o.y + rise + r.y, w: r.w, h: r.h }, this.date));
+        if (r) this.safe(() => this.art.drawClock(ctx, { x: o.x + r.x, y: o.y + rise + r.y, w: r.w, h: r.h }, this.wallClockDate));
         return;
       }
       case 'whiteboard': {
@@ -837,8 +866,10 @@ export class Renderer {
   private drawCharacter(ch: Character, now: number, sel: { agent: string | null; hover: string | null }): void {
     const { ctx } = this;
     const head = this.headOf(ch);
+    const afx = this.sim.arena.state.fx;
+    const hitDx = afx && afx.toId === ch.id && now >= afx.at && now <= afx.until ? Math.round(Math.sin(now / 22) * 1.5) : 0;
     // faixa lateral de quem anda (dois no mesmo caminho não viram um boneco de duas cabeças)
-    const x = Math.round(ch.x + ch.offX);
+    const x = Math.round(ch.x + ch.offX) + hitDx;
     const y = Math.round(ch.y + ch.offY);
     ctx.globalAlpha = ch.alpha;
     // anéis no chão (seleção, hover, alerta)

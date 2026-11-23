@@ -270,6 +270,61 @@ export function renderAdminHtml(): string {
       </div>
 
       <div class="card">
+        <h2>🎨 大屏全局外观与显示设置</h2>
+        <p class="muted" style="margin-top:0">
+          统一控制所有观众端办公室大屏的节日主题、昼夜光照、角色活跃度与显示开关；所有时间（昼夜循环、节日日历、决斗排行榜整点清零）均严格按<strong>北京时间（UTC+8）</strong>计算。
+        </p>
+        <form id="office-settings-form">
+          <div class="row">
+            <div>
+              <label for="opt-theme">节日主题</label>
+              <select id="opt-theme">
+                <option value="auto">自动跟随日历（10月万圣 / 11-12月圣诞 / 其余经典）</option>
+                <option value="none">经典原版办公室</option>
+                <option value="christmas">圣诞节主题 🎄</option>
+                <option value="halloween">万圣节主题 🎃</option>
+              </select>
+            </div>
+            <div>
+              <label for="opt-daylight">昼夜光照模式</label>
+              <select id="opt-daylight">
+                <option value="auto">自动跟随北京时间（UTC+8）</option>
+                <option value="day">常亮白天 ☀️</option>
+                <option value="night">常暗夜晚 🌙</option>
+              </select>
+            </div>
+          </div>
+          <div class="row">
+            <div>
+              <label for="opt-liveliness">摸鱼活跃度</label>
+              <select id="opt-liveliness">
+                <option value="lively">活跃（积极闲逛与互动）</option>
+                <option value="normal">适中</option>
+                <option value="calm">安静（少走动）</option>
+              </select>
+            </div>
+            <div>
+              <label for="opt-bubbles">活动状态气泡</label>
+              <select id="opt-bubbles">
+                <option value="important">仅显示重要状态</option>
+                <option value="all">显示全部活动气泡</option>
+                <option value="none">隐藏活动气泡</option>
+              </select>
+            </div>
+          </div>
+          <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-top:12px">
+            <label style="display:inline-flex;align-items:center;gap:8px;margin:0;cursor:pointer;color:var(--text)">
+              <input id="opt-show-names" type="checkbox" style="width:auto" checked />
+              <span>显示人物与宠物头顶名称</span>
+            </label>
+            <button class="btn btn-primary" type="submit">保存大屏设置</button>
+            <button class="btn" id="reset-office-btn" type="button">恢复默认</button>
+          </div>
+          <div id="office-msg" class="muted" style="margin-top:8px" hidden></div>
+        </form>
+      </div>
+
+      <div class="card">
         <h2>✨ 创建常驻 NPC（人 / 宝可梦 / Codex V2 桌宠）</h2>
         <p class="muted" style="margin-top:0">新建的 NPC 会立刻出现在虚拟办公室中，可以自由摸鱼（打乒乓球、喝咖啡、玩街机）或坐在工位办公。</p>
         <div class="tabs">
@@ -398,7 +453,7 @@ export function renderAdminHtml(): string {
 
     function fmtTime(ms) {
       if (!ms) return '-';
-      return new Date(ms).toLocaleString('zh-CN');
+      return new Date(ms).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
     }
 
     async function api(path, opts = {}) {
@@ -491,6 +546,12 @@ export function renderAdminHtml(): string {
       $('effective-base-url').textContent = data.effectiveBaseUrl || window.location.origin;
       $('site-reception-sign').value = (data.settings && data.settings.receptionSign) || '';
       $('effective-reception-sign').textContent = (data.settings && data.settings.effectiveReceptionSign) || 'Agent Party';
+      const os = (data.settings && data.settings.officeSettings) || {};
+      $('opt-theme').value = os.theme || 'auto';
+      $('opt-daylight').value = os.daylight || 'auto';
+      $('opt-liveliness').value = os.liveliness || 'lively';
+      $('opt-bubbles').value = os.bubbles || 'important';
+      $('opt-show-names').checked = os.showNames !== false;
 
       renderPetGrid(data.pets || []);
       if (!$('poke-chips').children.length) void searchPokeChips('');
@@ -694,6 +755,52 @@ export function renderAdminHtml(): string {
     $('reset-sign-btn').addEventListener('click', () => {
       $('site-reception-sign').value = '';
       void saveReceptionSign('');
+    });
+
+    async function saveOfficeSettings(patch) {
+      const msgEl = $('office-msg');
+      msgEl.hidden = false;
+      msgEl.style.color = 'var(--muted)';
+      msgEl.textContent = '正在保存大屏全局设置…';
+      try {
+        const res = await api('/api/admin/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ officeSettings: patch }),
+        });
+        const os = res.officeSettings || {};
+        $('opt-theme').value = os.theme || 'auto';
+        $('opt-daylight').value = os.daylight || 'auto';
+        $('opt-liveliness').value = os.liveliness || 'lively';
+        $('opt-bubbles').value = os.bubbles || 'important';
+        $('opt-show-names').checked = os.showNames !== false;
+        msgEl.style.color = 'var(--ok)';
+        msgEl.textContent = '✅ 已保存，所有大屏画面已实时更新';
+      } catch (e) {
+        msgEl.style.color = '#ff8e99';
+        msgEl.textContent = '❌ ' + e.message;
+      }
+    }
+
+    $('office-settings-form').addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      void saveOfficeSettings({
+        theme: $('opt-theme').value,
+        daylight: $('opt-daylight').value,
+        liveliness: $('opt-liveliness').value,
+        bubbles: $('opt-bubbles').value,
+        showNames: $('opt-show-names').checked,
+      });
+    });
+
+    $('reset-office-btn').addEventListener('click', () => {
+      void saveOfficeSettings({
+        theme: 'auto',
+        daylight: 'auto',
+        liveliness: 'lively',
+        bubbles: 'important',
+        showNames: true,
+      });
     });
 
     $('up-btn').addEventListener('click', async () => {

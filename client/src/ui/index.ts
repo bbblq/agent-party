@@ -86,6 +86,24 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   let scene: SceneSwitch | null = null;
   const inCity = () => !!scene?.inCity;
 
+  const syncWorldOptions = () => {
+    const base = worldOptionsFrom(prefs);
+    const g = store.snapshot?.meta.officeSettings;
+    world.setOptions(
+      g
+        ? {
+            ...base,
+            theme: g.theme,
+            daylight: g.daylight,
+            dayNight: g.daylight !== 'day',
+            liveliness: g.liveliness,
+            bubbles: g.bubbles,
+            showNames: g.showNames,
+          }
+        : base,
+    );
+  };
+
   const ctx: UiContext = {
     store,
     world,
@@ -96,7 +114,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
     updatePrefs(patch) {
       prefs = { ...prefs, ...patch };
       savePrefs(storage, prefs);
-      world.setOptions(worldOptionsFrom(prefs));
+      syncWorldOptions();
       invalidate();
     },
     now: () => timelapse?.replayTime ?? Date.now() + skew,
@@ -335,6 +353,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
     // Ao vivo, o "agora" da interface segue o relógio do servidor (o aparelho pode estar adiantado ou atrasado).
     // No timelapse, quem manda é o instante reproduzido pelo player (parado quando pausado).
     if (store.connection === 'open' && !store.replaying) skew = snap.serverTime - Date.now();
+    syncWorldOptions();
     invalidate();
   });
   store.on('connection', () => invalidate());
@@ -472,7 +491,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   }
 
   // ---------------------------------------------------------------- início
-  world.setOptions(worldOptionsFrom(prefs));
+  syncWorldOptions();
   applyLayout();
   renderAll();
 }

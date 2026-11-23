@@ -108,6 +108,7 @@ export class Social {
    * própria mesa, sem nada planejado. Quem cochila de tão ocioso pode ser acordado por um convite.
    */
   canJoin(c: Character, now: number): boolean {
+    if (this.sim.arena.isBusy(c.id)) return false;
     if (c.gone || c.leaving || c.arriving || c.inside || c.gathering) return false;
     if (c.mode !== 'idle' && c.mode !== 'shell') return false;
     if (c.step || c.queue.length) return false;

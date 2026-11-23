@@ -145,7 +145,8 @@ describe('sol pelas janelas', () => {
 });
 
 describe('hora efetiva e parâmetro ?hora=', () => {
-  const date = new Date(2026, 9, 8, 14, 45, 0);
+  // 06:45:00 UTC === 14:45:00 Beijing Time (UTC+8)
+  const date = new Date(Date.UTC(2026, 9, 8, 6, 45, 0));
 
   it('lê os formatos aceitos', () => {
     expect(parseHourParam('?hora=21:30')).toBe(21.5);

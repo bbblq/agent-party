@@ -5,7 +5,7 @@
 // Também cuida da reconexão: quando o navegador desiste do stream (EventSource fechado após erro HTTP,
 // ex.: servidor reiniciando atrás de um proxy), tenta de novo com espera crescente.
 import type { AppearanceParts } from '../../../shared/appearance';
-import type { Activity, AgentDetail, AgentInfo, AgentPetInfo, FeedItem, Notice, OfficeSnapshot, OutboxMessage, PermissionDecision, PermissionRequestInfo, RoomInfo, WorldSyncFrame } from '../../../shared/types';
+import type { Activity, AgentDetail, AgentInfo, AgentPetInfo, FeedItem, Notice, OfficeSnapshot, OutboxMessage, PermissionDecision, PermissionRequestInfo, RoomInfo, SyncedArenaEvent, WorldSyncFrame } from '../../../shared/types';
 import { DemoSimulator } from '../../../shared/demo/simulator';
 import { tr } from '../../../shared/i18n';
 
@@ -28,6 +28,7 @@ export interface PokemonSearchItem {
 export interface StoreEvents {
   snapshot: OfficeSnapshot;
   world: WorldSyncFrame;
+  arena: SyncedArenaEvent;
   feed: FeedItem[];
   notice: Notice;
   connection: ConnectionState;
@@ -109,6 +110,7 @@ function getSessionAdminKey(): string {
 export class OfficeStore {
   snapshot: OfficeSnapshot | null = null;
   lastWorldFrame: WorldSyncFrame | null = null;
+  lastArenaEvent: SyncedArenaEvent | null = null;
   /** Feed global, do mais antigo para o mais recente. */
   feed: FeedItem[] = [];
   connection: ConnectionState = 'connecting';
@@ -587,6 +589,14 @@ export class OfficeStore {
       if (frame) {
         this.lastWorldFrame = frame;
         this.emit('world', frame);
+      }
+    });
+    es.addEventListener('arena', (ev) => {
+      if (!current()) return;
+      const data = this.parse<SyncedArenaEvent>(ev, 'arena');
+      if (data) {
+        this.lastArenaEvent = data;
+        this.emit('arena', data);
       }
     });
     es.addEventListener('feed', (ev) => {

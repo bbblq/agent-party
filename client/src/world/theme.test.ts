@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { seasonalThemeFor } from './api';
 
 describe('tema do escritório', () => {
-  const at = (month: number, day: number, hour = 12) => new Date(2026, month - 1, day, hour);
+  // Construct exact Beijing Time (UTC+8) instant regardless of runner OS timezone
+  const at = (month: number, day: number, hour = 12) => new Date(Date.UTC(2026, month - 1, day, hour - 8, 0, 0));
 
-  it('automático segue o calendário (hora local)', () => {
+  it('automático segue o calendário (horário de Pequim UTC+8)', () => {
     expect(seasonalThemeFor('auto', at(9, 30, 23))).toBe('none');
     expect(seasonalThemeFor('auto', at(10, 1, 0))).toBe('halloween');
     expect(seasonalThemeFor('auto', at(10, 31, 23))).toBe('halloween');

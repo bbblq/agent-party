@@ -334,6 +334,14 @@ export interface AccountInfo {
   usageStatus: 'ok' | 'stale' | 'disabled';
 }
 
+export interface OfficeGlobalSettings {
+  theme: 'auto' | 'none' | 'christmas' | 'halloween';
+  daylight: 'auto' | 'day' | 'night';
+  liveliness: 'calm' | 'normal' | 'lively';
+  bubbles: 'all' | 'important' | 'none';
+  showNames: boolean;
+}
+
 export interface OfficeSnapshot {
   /** Incrementa a cada mudança. */
   rev: number;
@@ -350,6 +358,7 @@ export interface OfficeSnapshot {
     startedAt: number;
     version: string;
     receptionSign?: string;
+    officeSettings?: OfficeGlobalSettings;
     /**
      * Identificador do build do cliente que o servidor está servindo (nome do bundle, ex.: "main-BFqheOCa").
      * Uma página aberta com outro build está desatualizada e deve se recarregar. Ausente no modo dev.
@@ -831,6 +840,50 @@ export interface SyncedGathering {
   members: Array<{ id: string; role: string; left?: boolean }>;
 }
 
+export type ArenaFxKind = 'thunder' | 'fire' | 'water' | 'beam' | 'slash' | 'star';
+
+export interface SyncedArenaFx {
+  id: number;
+  kind: ArenaFxKind;
+  fromId: string;
+  toId: string;
+  moveName: string;
+  at: number;
+  until: number;
+}
+
+export interface ArenaLeaderboardEntry {
+  id: string;
+  name: string;
+  wins: number;
+  losses: number;
+}
+
+export interface SyncedArenaState {
+  phase: 'idle' | 'gather' | 'fight' | 'finish';
+  matchId: number;
+  leftId?: string;
+  leftName?: string;
+  leftHp: number;
+  rightId?: string;
+  rightName?: string;
+  rightHp: number;
+  startedAt: number;
+  endsAt: number;
+  durationMs: number;
+  nextDuelAt?: number;
+  winnerId?: string;
+  winnerName?: string;
+  watchers: string[];
+  fx?: SyncedArenaFx;
+  leaderboard: ArenaLeaderboardEntry[];
+}
+
+export interface SyncedArenaEvent {
+  t: number;
+  arena: SyncedArenaState;
+}
+
 export interface WorldSyncFrame {
   t: number;
   rev: number;
@@ -842,4 +895,5 @@ export interface WorldSyncFrame {
   gatherings: SyncedGathering[];
   arcadeSeed: number | null;
   tvScreen: { mode: string; seed: number } | null;
+  arena?: SyncedArenaState;
 }

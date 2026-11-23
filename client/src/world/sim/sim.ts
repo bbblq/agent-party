@@ -7,7 +7,7 @@ import type { WorldOptions } from '../api';
 import { COL_W, COMPACT_DELAY_MS, DISMANTLE_DELAY_MS, FOOT_DX, FOOT_DY, MISSING_DEBOUNCE_MS, RUN_SPEED, TILE, WALK_SPEED } from '../constants';
 import { assembleBuilding, type BuildingLayout } from '../layout/building';
 import { RECEPTION_ID } from '../layout/core';
-import { columnsFor, inRect } from '../layout/geometry';
+import { columnsFor, inRect, slotAt } from '../layout/geometry';
 import { layoutProjectRoom } from '../layout/room';
 import type { SpotDef, SpotKind } from '../layout/types';
 import { PathFinder } from '../path/astar';
@@ -16,6 +16,7 @@ import { PROGRAM_SEED } from '../social/gathering';
 import { hasTrait, personaFor, soloWeights } from '../social/persona';
 import { Social } from '../social/social';
 import { browserStorage, type StorageLike } from '../social/wallet';
+import { ArenaController } from './arena';
 import {
   canDismantle,
   chooseSeat,
@@ -117,6 +118,8 @@ export class Sim {
   readonly stallBusy = new Set<string>();
   /** Vida social: rodas dos ociosos, personalidades e carteiras (social/social.ts). */
   readonly social: Social;
+  /** 宝可梦决斗场地调度器（右下角场地对战、围观与排行榜）。 */
+  readonly arena: ArenaController = new ArenaController(this);
   /** Depuração: agentes forçados a encerrar e salas forçadas a sumir do snapshot. */
   readonly forcedOffline = new Set<string>();
   readonly hiddenRooms = new Set<string>();
@@ -319,6 +322,7 @@ export class Sim {
     for (const id of frame.stalls) this.stallBusy.add(id);
 
     this.social.applySyncedSocial(frame.gatherings, frame.arcadeSeed, frame.tvScreen, offset);
+    if (frame.arena) this.arena.applySynced(frame.arena, offset);
 
     const frameIds = new Set<string>();
     for (const cf of frame.chars) {
@@ -667,6 +671,7 @@ export class Sim {
   relayout(force = false): void {
     const present = [...this.rooms.values()].filter((r) => r.present);
     let cols = columnsFor(present.map((r) => r.slot));
+    if (present.some((r) => r.slot === slotAt(cols - 1, 'south'))) cols++;
     const cur = this.building.cols;
     if (cols < cur && !force) {
       // só encolhe quando ninguém está na faixa que vai sumir
@@ -739,6 +744,7 @@ export class Sim {
     for (const e of this.elevators) e.update(dt, now);
     this.updateRooms(now);
     this.social.update(now);
+    if (!this.visit) this.arena.update(now);
     if (this.roomFx.active.size) this.roomFx.update(this, now);
     for (const ch of this.chars.values()) {
       if (ch.missingSince !== null && !ch.leaving && now - ch.missingSince >= MISSING_DEBOUNCE_MS) this.refreshMode(ch);
@@ -1320,6 +1326,7 @@ export class Sim {
     const room = this.rooms.get(ch.roomId);
     if (room && room.switchClaim === ch.id) room.switchClaim = null;
     if (ch.gathering) this.social.leave(ch, this.now);
+    this.arena.onLeave(ch, this.now);
     ch.chatUntil = 0;
   }
 
@@ -1339,6 +1346,7 @@ export class Sim {
     if (ch.gone) return false;
     if (ch.mode === 'leave') return this.planLeave(ch, now);
     if (ch.mode === 'deliver') return this.planDeliver(ch, now);
+    if (this.arena.isBusy(ch.id)) return false;
     const room = this.rooms.get(ch.roomId);
     if (!room || !room.present) return this.planLobby(ch, room);
     this.assignHome(ch);
@@ -1383,7 +1391,7 @@ export class Sim {
   }
 
   /** Levantar/sair do lugar atual antes de andar. */
-  private pushLeave(ch: Character, steps: Step[]): void {
+  pushLeave(ch: Character, steps: Step[]): void {
     if (ch.atSpot) steps.push({ t: 'exit' });
   }
 

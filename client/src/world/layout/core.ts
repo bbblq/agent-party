@@ -8,6 +8,7 @@ export const RECEPTION_ID = 'core:recepcao';
 export const RESTROOM_ID = 'core:banheiros';
 export const CAFE_ID = 'core:copa';
 export const LOUNGE_ID = 'core:lounge';
+export const ARENA_ID = 'core:arena';
 
 /** Paredes do núcleo: tons claros e neutros (frios), com acabamentos diferentes por ambiente. */
 export const CORE_WALLS = {
@@ -16,6 +17,7 @@ export const CORE_WALLS = {
   cafe: { base: '#eef0ee', trim: '#9aa6ad', pattern: 'plain' } satisfies WallStyle,
   cafeSplash: { base: '#d9dcdf', trim: '#8d969e', pattern: 'marble' } satisfies WallStyle,
   lounge: { base: '#e6e2ea', trim: '#8f8aa3', pattern: 'plain' } satisfies WallStyle,
+  arena: { base: '#2c3954', trim: '#d4af4f', pattern: 'plain' } satisfies WallStyle,
   glass: { base: '#cfe6f0', trim: '#9fb9c6', pattern: 'glass' } satisfies WallStyle,
 };
 
@@ -245,4 +247,40 @@ export function layoutLounge(): AreaLayout {
   b.spot('watch', 10, 5, 'down', { group: 'watch:pingpong', dx: 2 });
   b.spot('watch', 12, 5, 'down', { group: 'watch:pingpong', dx: -2 });
   return b.build();
+}
+
+/** 宝可梦决斗场地（固定位于大楼最右下角）。 */
+export function layoutArena(col: number): AreaLayout {
+  const b = new AreaBuilder(ARENA_ID, 'arena', { x: col * COL_W, y: SOUTH_Y, w: COL_W, h: ROOM_H });
+  const wall = CORE_WALLS.arena;
+  b.floor('wood', 0, 0, 16, 12, 501);
+  // 走廊连通宽大门洞（4 格宽，方便宠物和围观同事进出）
+  b.face(0.5, 15, wall, [{ lx: 6, w: 4 }]);
+  b.south(0.5, 15, 11, { ...wall, exterior: true });
+  b.cap(0, 0, 0.5, 12, wall);
+  b.cap(15.5, 0, 0.5, 12, wall);
+  b.walk(1, 2, 14, 9);
+  b.walk(6, 0, 4, 2);
+  b.area.door = { x: col * COL_W + 6, y: SOUTH_Y, w: 4, h: 2 };
+
+  // 四角绿植装饰（右上墙面留空给挂墙倒计时电视；右下角 12..14, 9..10 留给排行榜立牌）
+  b.furn('plant_tall', 1, 2, 'palm', { order: 0.2 });
+  b.furn('plant_small', 14, 2, 'fern', { order: 0.21 });
+  b.furn('plant_tall', 1, 10, 'monstera', { order: 0.22 });
+
+  // 对战双方站位（红区左 / 蓝区右，面对面）
+  b.spot('arena_fight', 4, 6, 'right', { group: 'arena:ring' });
+  b.spot('arena_fight', 11, 6, 'left', { group: 'arena:ring' });
+
+  // 围观观众位：北侧看台优先面朝下（无背面图桌宠也能坐看），南侧两席补充
+  b.spot('arena_watch', 3, 3, 'down', { group: 'arena:watch' });
+  b.spot('arena_watch', 5, 3, 'down', { group: 'arena:watch' });
+  b.spot('arena_watch', 10, 3, 'down', { group: 'arena:watch' });
+  b.spot('arena_watch', 12, 3, 'down', { group: 'arena:watch' });
+  b.spot('arena_watch', 4, 9, 'up', { group: 'arena:watch' });
+  b.spot('arena_watch', 8, 9, 'up', { group: 'arena:watch' });
+
+  const a = b.build();
+  a.shade = undefined;
+  return a;
 }

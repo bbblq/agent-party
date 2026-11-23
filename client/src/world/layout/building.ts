@@ -3,7 +3,7 @@ import { FURNITURE } from '../../art/api';
 import { BUILDING_H, COL_W } from '../constants';
 import { BLOCKED, FREE, SEAT, WalkGrid } from '../path/grid';
 import { furnitureBlocks, furnitureIsSeat } from './builder';
-import { layoutCafe, layoutLounge, layoutReception, layoutRestroom } from './core';
+import { layoutCafe, layoutLounge, layoutReception, layoutRestroom, layoutArena } from './core';
 import { layoutCorridor } from './corridor';
 import { buildingRect } from './geometry';
 import type { AreaLayout, SpotDef, TileRect } from './types';
@@ -12,6 +12,7 @@ export interface BuildingLayout {
   cols: number;
   rect: TileRect;
   core: AreaLayout[];
+  arena: AreaLayout;
   corridor: AreaLayout;
   rooms: AreaLayout[];
   grid: WalkGrid;
@@ -47,11 +48,12 @@ export function buildWalkGrid(cols: number, areas: readonly AreaLayout[], versio
 }
 
 export function assembleBuilding(cols: number, rooms: readonly AreaLayout[], version = 0): BuildingLayout {
-  const core = coreAreas();
+  const arena = layoutArena(cols - 1);
+  const core = [...coreAreas(), arena];
   const corridor = layoutCorridor(cols);
   const all = [...core, corridor, ...rooms];
   const grid = buildWalkGrid(cols, all, version);
   const spots: SpotDef[] = [];
   for (const a of all) spots.push(...a.spots);
-  return { cols, rect: buildingRect(cols), core, corridor, rooms: [...rooms], grid, spots };
+  return { cols, rect: buildingRect(cols), core, arena, corridor, rooms: [...rooms], grid, spots };
 }

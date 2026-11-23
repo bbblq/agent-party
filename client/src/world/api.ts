@@ -1,6 +1,7 @@
 // CONTRATO do mundo (canvas do escritório) consumido pela UI (client/src/ui/**).
 // Implementação: client/src/world/index.ts -> createWorld().
 // Regra: mudanças aqui devem ser ADITIVAS.
+import { beijingParts } from '../../../shared/beijing';
 
 export type Selection = { type: 'agent'; id: string } | { type: 'room'; id: string } | null;
 
@@ -26,14 +27,14 @@ export type SeasonalTheme = 'none' | 'christmas' | 'halloween';
 export type OfficeTheme = 'auto' | SeasonalTheme;
 
 /**
- * Tema desenhado numa data (hora local). No automático: Halloween de 1º a 31 de outubro, Natal de 1º de novembro a
- * 26 de dezembro e, no resto do ano, o escritório original.
+ * Tema desenhado numa data (horário de Pequim UTC+8). No automático: Halloween de 1º a 31 de outubro, Natal de 1º de
+ * novembro a 26 de dezembro e, no resto do ano, o escritório original.
  */
 export function seasonalThemeFor(theme: OfficeTheme | undefined, date: Date): SeasonalTheme {
   if (theme && theme !== 'auto') return theme;
-  const month = date.getMonth();
+  const { month, day } = beijingParts(date.getTime());
   if (month === 9) return 'halloween';
-  if (month === 10 || (month === 11 && date.getDate() <= 26)) return 'christmas';
+  if (month === 10 || (month === 11 && day <= 26)) return 'christmas';
   return 'none';
 }
 

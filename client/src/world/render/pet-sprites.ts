@@ -269,7 +269,7 @@ export function resolveCodexFrame(opts: {
       return { row: row10, col: 0, flipX: false, offsetY: 0 };
     }
 
-    if ((opts.dir === 'right' || opts.dir === 'left') && opts.pose !== 'walk' && opts.pose !== 'run' && opts.pose !== 'sulk') {
+    if ((opts.dir === 'right' || opts.dir === 'left') && opts.pose !== 'walk' && opts.pose !== 'run') {
       const row = opts.dir === 'right' ? row9 : row10;
       let offsetY = 0;
       if (opts.pose === 'play' || opts.pose === 'cheer' || opts.pose === 'laugh' || opts.pose === 'game') {
@@ -286,6 +286,18 @@ export function resolveCodexFrame(opts: {
         offsetY = Math.floor(t / 220) % 2 === 1 ? -0.6 : 0;
       }
       return { row, col: 4, flipX: false, offsetY };
+    }
+  }
+
+  if (!hasGazeRows && (opts.dir === 'right' || opts.dir === 'left') && opts.pose !== 'walk' && opts.pose !== 'run') {
+    const dirKey = opts.dir === 'right' ? 'running-right' : 'running-left';
+    const dirState = opts.states[dirKey] ?? DEFAULT_STATES[dirKey];
+    if (dirState && dirState.row < opts.actualRows) {
+      let offsetY = 0;
+      if (opts.pose === 'play' || opts.pose === 'cheer' || opts.pose === 'laugh' || opts.pose === 'game') {
+        offsetY = Math.floor(t / 180) % 2 === 1 ? -2 : 0;
+      }
+      return { row: dirState.row, col: 0, flipX: false, offsetY };
     }
   }
 

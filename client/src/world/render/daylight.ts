@@ -1,6 +1,7 @@
 // Ciclo dia/noite (puro): fase do dia, nível de luz e as cores de multiplicação do exterior e dos
-// interiores pela hora local, a hora efetiva (preferência, ?hora= da URL) e a leitura do parâmetro.
+// interiores pela hora de Pequim (UTC+8), a hora efetiva (preferência, ?hora= da URL) e a leitura do parâmetro.
 // O desenho (mapa de luz, halos) fica em lighting.ts.
+import { beijingParts } from '../../../../shared/beijing';
 import type { DaylightMode } from '../api';
 
 export type { DaylightMode };
@@ -166,12 +167,12 @@ export function parseHourParam(search: string | null | undefined): number | null
   return wrapHour(hh + mm / 60);
 }
 
-/** Hora efetiva do ciclo: a forçada (URL/depuração) vale sobre a preferência; senão a hora local. */
+/** Hora efetiva do ciclo: a forçada (URL/depuração) vale sobre a preferência; senão a hora de Pequim (UTC+8). */
 export function effectiveHour(mode: DaylightMode, override: number | null, date: Date): number {
   if (override !== null && Number.isFinite(override)) return wrapHour(override);
   if (mode === 'day') return FIXED_DAY_HOUR;
   if (mode === 'night') return FIXED_NIGHT_HOUR;
-  return date.getHours() + date.getMinutes() / 60 + date.getSeconds() / 3600;
+  return beijingParts(date.getTime()).fractionalHour;
 }
 
 /** Modo do ciclo a partir das opções do mundo (`dayNight` é o interruptor antigo, ainda aceito). */
