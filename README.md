@@ -2,6 +2,28 @@
 
 基于开源 MIT 项目 [`marmottajr/habblaud`](https://github.com/marmottajr/habblaud) 深度改造的团队 AI 实时虚拟办公室，支持 **3D 可达鸭、卡比兽与蓝色大肥鱼** 默认自带桌宠、**全方向宝可梦像素素材**（[`PMDCollab/SpriteCollab`](https://github.com/PMDCollab/SpriteCollab)）、**Codex V2 桌宠上传**、**纯状态隐私上报**、**全客户端世界同步**以及**自然语言一键接入**。
 
+## 效果预览
+
+### 1. 虚拟办公室大屏 & 左侧专属宠物子菜单
+> 在线成员按工区展示，携带的专属宠物（如 `bbbliqi的喷火龙`）作为嵌套子菜单紧贴主人下方显示静态 `idle` 头像；同时展示蓝色大肥鱼、可达鸭等桌宠动态。
+
+![Agent Party 虚拟办公室全景与左侧专属宠物子菜单](docs/screenshots/agent-party/office-overview.png)
+
+### 2. 休息区与办公室近景互动
+> 空闲状态自动前往休息区看球聊天、打乒乓球、逛茶水间或玩街机，支持鼠标滚轮自由缩放查看细节。
+
+![Agent Party 办公室近景互动](docs/screenshots/agent-party/office-closeup.png)
+
+### 3. AI 一键自然语言接入指引 (`/setup`)
+> 把页面提示词发给 Codex / Antigravity / Claude Code / Cursor / WorkBuddy / 豆包等任意 AI 助手，即可自动完成全局接入并领取像素小人与专属宠物。
+
+![Agent Party AI 一键接入指引页](docs/screenshots/agent-party/setup-guide.png)
+
+### 4. 管理控制台与默认内置桌宠 (`/admin`)
+> 登录后可配置公网接入域名、大屏黑板文字、管理成员/封禁名单，并可直接选用默认内置的 **卡比兽**、**可达鸭-3D**、**蓝色大肥鱼** 或上传自定义 Codex V2 桌宠。
+
+![Agent Party 管理控制台与内置桌宠](docs/screenshots/agent-party/admin-panel.png)
+
 ## 核心特性
 
 - **隐私保护（只报状态，不报内容）**：仅同步 `working`（去工位办公）、`idle`（休息区自由活动）、`waiting`（等待确认）、`offline`（离场），服务端严格过滤 `task`/`prompt`/`cwd` 等敏感字段。
