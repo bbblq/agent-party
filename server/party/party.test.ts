@@ -105,7 +105,7 @@ describe('Codex V2 PetRegistry & Pokémon lookup', () => {
     expect(pets.listPets().map((p) => p.id)).toContain('test-pet');
   });
 
-  it('loads only bundled default pets (psyduck-3d & snorlax) when AUTO_IMPORT_CODEX_PETS is unset', () => {
+  it('loads only bundled default pets (dafeiyu, psyduck-3d & snorlax) when AUTO_IMPORT_CODEX_PETS is unset', () => {
     const prevEnv = process.env.AUTO_IMPORT_CODEX_PETS;
     delete process.env.AUTO_IMPORT_CODEX_PETS;
     try {
@@ -113,8 +113,10 @@ describe('Codex V2 PetRegistry & Pokémon lookup', () => {
       const defaultPetsDir = join(process.cwd(), 'assets', 'default-pets');
       const pets = new PetRegistry(dir, undefined, null, defaultPetsDir);
       const list = pets.listPets();
-      expect(list.map((p) => p.id).sort()).toEqual(['psyduck-3d', 'snorlax']);
+      expect(list.map((p) => p.id).sort()).toEqual(['dafeiyu', 'psyduck-3d', 'snorlax']);
       const byId = new Map(list.map((p) => [p.id, p]));
+      expect(byId.get('dafeiyu')?.source).toBe('builtin');
+      expect(byId.get('dafeiyu')?.hasBackView).toBe(true);
       expect(byId.get('psyduck-3d')?.source).toBe('builtin');
       expect(byId.get('psyduck-3d')?.hasBackView).toBe(false);
       expect(byId.get('snorlax')?.source).toBe('builtin');

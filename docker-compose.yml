@@ -15,7 +15,7 @@ services:
       AGENT_PARTY_ADMIN_KEY: ${AGENT_PARTY_ADMIN_KEY:-}
       # 反向代理公网访问根地址，例如 https://party.example.com（留空则自动识别 Host）
       PUBLIC_URL: ${PUBLIC_URL:-}
-      # 默认仅使用内置 3D 可达鸭 & 卡比兽 + 宝可梦图鉴，设为 1 才扫描本地 ~/.codex/pets
+      # 默认仅使用内置 3D 可达鸭、卡比兽、蓝色大肥鱼 + 宝可梦图鉴，设为 1 才扫描本地 ~/.codex/pets
       AUTO_IMPORT_CODEX_PETS: ${AUTO_IMPORT_CODEX_PETS:-0}
       WORKING_TIMEOUT_MS: ${WORKING_TIMEOUT_MS:-300000}
       OFFLINE_TIMEOUT_MS: ${OFFLINE_TIMEOUT_MS:-604800000}
