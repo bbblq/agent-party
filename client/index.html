@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#12151d" />
+    <meta name="description" content="Agent Party — 像素风 AI 虚拟办公室，实时展示朋友与同事的 AI 工作与摸鱼状态。" />
+    <title>Agent Party</title>
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Agent Party" />
+    <meta property="og:title" content="Agent Party" />
+    <meta property="og:description" content="像素风 AI 虚拟办公室，支持宝可梦、Codex V2 桌宠与多视角同步。" />
+    <meta property="og:locale" content="zh_CN" />
+    <meta property="og:image" content="/assets/og-image.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Agent Party 像素风 AI 虚拟办公室" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Agent Party" />
+    <meta name="twitter:description" content="像素风 AI 虚拟办公室，实时展示朋友与同事的 AI 工作与摸鱼状态。" />
+    <meta name="twitter:image" content="/assets/og-image.png" />
+    <link rel="icon" href="/assets/brand/favicon-32.png" type="image/png" sizes="32x32" />
+    <link rel="icon" href="/assets/brand/favicon-16.png" type="image/png" sizes="16x16" />
+    <link rel="apple-touch-icon" href="/assets/brand/apple-touch-icon.png" />
+    <!-- App na Tela de Início (celular): tela cheia, ícone e nome. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Agent Party" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #12151d; }
+      #world, #city, #visit { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; image-rendering: pixelated; }
+      #world[hidden], #city[hidden], #visit[hidden] { display: none; }
+      #ui { position: fixed; inset: 0; pointer-events: none; }
+      #ui > * { pointer-events: auto; }
+    </style>
+  </head>
+  <body>
+    <canvas id="world"></canvas>
+    <div id="ui"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

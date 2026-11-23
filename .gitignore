@@ -1,0 +1,12 @@
+node_modules/
+dist/
+data/
+.DS_Store
+*.log
+.env
+.tmp-*.mjs
+docker-compose.override.yml
+scripts/assets/.cache/
+
+# Configurações locais do Claude Code e caches de geração
+.claude/

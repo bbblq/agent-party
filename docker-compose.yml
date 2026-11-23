@@ -1,0 +1,29 @@
+name: agent-party
+
+services:
+  agent-party:
+    image: bbblq/agent-party:latest
+    build: .
+    container_name: agent-party
+    restart: unless-stopped
+    ports:
+      - "${PORT:-4747}:4747"
+    volumes:
+      - agent-party-data:/data
+    environment:
+      # 部署时通过环境变量指定管理后台密码；留空则首次启动自动生成并写入 /data/admin.key
+      AGENT_PARTY_ADMIN_KEY: ${AGENT_PARTY_ADMIN_KEY:-}
+      # 反向代理公网访问根地址，例如 https://party.example.com（留空则自动识别 Host）
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      # 默认仅使用内置 3D 可达鸭 & 卡比兽 + 宝可梦图鉴，设为 1 才扫描本地 ~/.codex/pets
+      AUTO_IMPORT_CODEX_PETS: ${AUTO_IMPORT_CODEX_PETS:-0}
+      WORKING_TIMEOUT_MS: ${WORKING_TIMEOUT_MS:-300000}
+      OFFLINE_TIMEOUT_MS: ${OFFLINE_TIMEOUT_MS:-604800000}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+
+volumes:
+  agent-party-data:

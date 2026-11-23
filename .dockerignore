@@ -1,0 +1,16 @@
+*
+!package.json
+!package-lock.json
+!tsconfig.json
+!vite.config.ts
+!client/
+!shared/
+!server/
+!assets/
+!scripts/build-server.mjs
+!scripts/build-info.mjs
+
+# Exclude local junk inside included folders.
+**/node_modules
+**/.DS_Store
+**/*.log
