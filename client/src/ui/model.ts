@@ -379,9 +379,15 @@ export function groupRooms(snap: Pick<OfficeSnapshot, 'rooms' | 'agents' | 'acco
     const subsOf = new Map<string, AgentInfo[]>();
     const top: AgentInfo[] = [];
     for (const a of agents) {
-      if (a.kind === 'sub' && a.parentId && ids.has(a.parentId)) {
-        let list = subsOf.get(a.parentId);
-        if (!list) subsOf.set(a.parentId, (list = []));
+      const parentKey =
+        a.ownerId && ids.has(a.ownerId)
+          ? a.ownerId
+          : a.kind === 'sub' && a.parentId && ids.has(a.parentId)
+            ? a.parentId
+            : null;
+      if (parentKey) {
+        let list = subsOf.get(parentKey);
+        if (!list) subsOf.set(parentKey, (list = []));
         list.push(a);
       } else {
         top.push(a);

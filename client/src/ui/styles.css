@@ -543,6 +543,17 @@
   user-select: none;
 }
 
+.ui-avatar.is-pet {
+  align-items: center;
+  padding: 2px;
+}
+
+.ui-avatar.is-pet img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
 .ui-avatar--xs {
   width: 20px;
   height: 20px;
@@ -1789,6 +1800,44 @@
 
 .ui-subs .ui-activity {
   font-size: 11.5px;
+}
+
+/* 专属宠物子菜单：紧贴主人下方、整体比人更小一档 */
+.ui-subs.is-pets {
+  margin: 0 0 4px 22px;
+  padding-left: 12px;
+}
+
+.ui-subs.is-pets .ui-subs__item:first-child::before {
+  top: -4px;
+}
+
+.ui-subs__item.is-pet .ui-agent {
+  padding: 2px 8px 2px 4px;
+  gap: 7px;
+}
+
+.ui-subs__item.is-pet .ui-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.ui-subs__item.is-pet .ui-agent__name {
+  font-size: 11.5px;
+  font-weight: 550;
+  color: color-mix(in srgb, var(--ui-text) 88%, transparent);
+}
+
+.ui-subs__item.is-pet .ui-activity {
+  font-size: 10.5px;
+}
+
+.ui-subs__item.is-pet .ui-tool-tag {
+  font-size: 9.5px;
+  padding: 0 4px;
+  line-height: 15px;
 }
 
 .ui-side__empty {

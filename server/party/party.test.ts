@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { Appearance, ArtModule, RoomTheme } from '../../client/src/art/api';
 import { getLocale, setLocale, tr } from '../../shared/i18n';
 import { DEFAULT_WORLD_OPTIONS } from '../../client/src/world/api';
+import { groupRooms } from '../../client/src/ui/model';
 import type { SpotDef } from '../../client/src/world/layout/types';
 import { chooseSeat, lacksBackView } from '../../client/src/world/sim/behavior';
 import { canEditCharacter } from '../../client/src/ui/character-model';
@@ -673,5 +674,30 @@ describe('Companion pet onboarding & industrial setup scripts', () => {
     const baseGate = { live: true, terminal: true, local: true, replaying: false, mock: false };
     expect(canEditCharacter(agentSample, { ...baseGate, admin: false })).toBe(false);
     expect(canEditCharacter(agentSample, { ...baseGate, admin: true })).toBe(true);
+  });
+
+  it('places companion pets in owner room with ownerId and nests them under owner in groupRooms', () => {
+    const dir = makeTempDir();
+    const pets = new PetRegistry(dir, null, null, join(process.cwd(), 'assets', 'default-pets'));
+    const store = new PartyStore({ dataDir: dir, pets });
+
+    for (let i = 1; i <= 7; i++) {
+      store.report({ id: `user-${i}`, name: `用户${i}`, status: 'working' });
+    }
+    store.report({ id: 'bbbliqi', name: 'bbbliqi', status: 'working', companionPetId: 'snorlax' });
+
+    const snap = store.toSnapshot();
+    const owner = snap.agents.find((a) => a.id === 'bbbliqi');
+    const comp = snap.agents.find((a) => a.id === 'bbbliqi:pet');
+    expect(owner).toBeTruthy();
+    expect(comp).toBeTruthy();
+    expect(comp?.ownerId).toBe('bbbliqi');
+    expect(comp?.roomId).toBe(owner?.roomId);
+
+    const groups = groupRooms(snap);
+    const ownerNode = groups.flatMap((g) => g.nodes).find((n) => n.agent.id === 'bbbliqi');
+    const topIds = groups.flatMap((g) => g.nodes).map((n) => n.agent.id);
+    expect(topIds).not.toContain('bbbliqi:pet');
+    expect(ownerNode?.subs.map((s) => s.id)).toEqual(['bbbliqi:pet']);
   });
 });

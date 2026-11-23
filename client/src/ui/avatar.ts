@@ -39,9 +39,10 @@ export function createAvatarPlaceholder(size: AvatarSize): HTMLElement {
 
 /** Atualiza o avatar só se a aparência (semente, look, peças) mudou. */
 export function updateAvatar(box: HTMLElement, agent: AvatarSource, size: AvatarSize): void {
-  const sig = `${agent.seed}|${agent.look}|${agent.kind}|${partsKey(agent.parts)}|${agent.pet?.spriteUrl ?? ''}`;
+  const sig = `${agent.seed}|${agent.look}|${agent.kind}|${partsKey(agent.parts)}|${agent.pet?.spriteUrl ?? ''}|${agent.pet?.pmd?.idle?.url ?? ''}`;
   if (box.dataset.sig === sig) return;
   box.dataset.sig = sig;
+  box.classList.toggle('is-pet', !!agent.pet?.spriteUrl);
   let img = box.querySelector('img');
   if (!img) {
     img = h('img', { attrs: { alt: '', draggable: 'false', decoding: 'async' } });
@@ -49,19 +50,24 @@ export function updateAvatar(box: HTMLElement, agent: AvatarSource, size: Avatar
   }
   const applyPet = (url: string) => {
     if (box.dataset.sig !== sig) return;
-    const px = SCALE[size] * 16;
-    img!.width = px;
-    img!.height = px;
-    img!.src = url;
+    img!.removeAttribute('width');
+    img!.removeAttribute('height');
+    img!.style.width = '100%';
+    img!.style.height = '100%';
     img!.style.objectFit = 'contain';
+    img!.src = url;
   };
   if (agent.pet?.spriteUrl) {
     const ready = loadPetAvatarUrl(agent.pet.spriteUrl, agent.pet.spec, applyPet, agent.pet.pmd);
     if (ready) {
       applyPet(ready);
-      return;
+    } else {
+      img.removeAttribute('src');
     }
+    return;
   }
+  img.style.width = '';
+  img.style.height = '';
   img.style.objectFit = '';
   try {
     const data = avatarData(agent, SCALE[size]);

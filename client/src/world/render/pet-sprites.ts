@@ -48,7 +48,7 @@ function resolveSpec(spec?: CodexV2Spec): { fw: number; fh: number; cols: number
   };
 }
 
-function measureFirstFrame(img: HTMLImageElement, fw: number, fh: number, smoothThumb: boolean): { box: OpaqueBox; avatarUrl: string } {
+function measureFirstFrame(img: HTMLImageElement, fw: number, fh: number, smoothThumb: boolean, row = 0): { box: OpaqueBox; avatarUrl: string } {
   const sw = Math.min(fw, img.naturalWidth || fw);
   const sh = Math.min(fh, img.naturalHeight || fh);
   let box: OpaqueBox = {
@@ -67,7 +67,8 @@ function measureFirstFrame(img: HTMLImageElement, fw: number, fh: number, smooth
     c.height = sh;
     const ctx = c.getContext('2d');
     if (ctx) {
-      ctx.drawImage(img, 0, 0, sw, sh, 0, 0, sw, sh);
+      const sy = Math.min(Math.max(0, row) * fh, Math.max(0, (img.naturalHeight || fh) - sh));
+      ctx.drawImage(img, 0, sy, sw, sh, 0, 0, sw, sh);
       const data = ctx.getImageData(0, 0, sw, sh).data;
       let minX = sw;
       let minY = sh;
@@ -119,8 +120,8 @@ function measureFirstFrame(img: HTMLImageElement, fw: number, fh: number, smooth
   return { box, avatarUrl };
 }
 
-function getOrLoad(spriteUrl: string, fw: number, fh: number, smoothThumb: boolean): CachedPetEntry {
-  const cacheKey = `${spriteUrl}|${fw}x${fh}`;
+function getOrLoad(spriteUrl: string, fw: number, fh: number, smoothThumb: boolean, row = 0): CachedPetEntry {
+  const cacheKey = `${spriteUrl}|${fw}x${fh}|r${row}`;
   let entry = cache.get(cacheKey);
   if (entry) return entry;
 
@@ -137,7 +138,7 @@ function getOrLoad(spriteUrl: string, fw: number, fh: number, smoothThumb: boole
 
   img.onload = () => {
     entry!.loaded = true;
-    const measured = measureFirstFrame(img, fw, fh, smoothThumb);
+    const measured = measureFirstFrame(img, fw, fh, smoothThumb, row);
     entry!.box = measured.box;
     entry!.avatarUrl = measured.avatarUrl || null;
     if (entry!.avatarUrl) {
@@ -164,13 +165,14 @@ export function loadPetAvatarUrl(
 ): string | null {
   if (pmd) {
     const baseAnim = pmd.idle ?? pmd.walk;
-    const entry = getOrLoad(baseAnim.url, baseAnim.frameWidth, baseAnim.frameHeight, false);
+    const entry = getOrLoad(baseAnim.url, baseAnim.frameWidth, baseAnim.frameHeight, false, 0);
     if (entry.avatarUrl) return entry.avatarUrl;
     if (!entry.failed) entry.waiters.add(onReady);
     return null;
   }
-  const { fw, fh } = resolveSpec(spec);
-  const entry = getOrLoad(spriteUrl, fw, fh, true);
+  const { fw, fh, states } = resolveSpec(spec);
+  const idleRow = states.idle?.row ?? 0;
+  const entry = getOrLoad(spriteUrl, fw, fh, true, idleRow);
   if (entry.avatarUrl) return entry.avatarUrl;
   if (!entry.failed) entry.waiters.add(onReady);
   return null;

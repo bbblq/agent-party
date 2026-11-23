@@ -803,8 +803,9 @@ export class PartyStore {
       .filter((m) => m.lastStatus !== 'offline')
       .sort((a, b) => a.joinedAt - b.joinedAt);
 
+    const primary = online.filter((m) => !m.ownerId);
     const DESKS_PER_ROOM = 6;
-    const roomCount = Math.max(1, Math.ceil(online.length / DESKS_PER_ROOM));
+    const roomCount = Math.max(1, Math.ceil(primary.length / DESKS_PER_ROOM));
     const rooms: RoomInfo[] = [];
     for (let i = 0; i < roomCount; i++) {
       rooms.push({
@@ -817,9 +818,16 @@ export class PartyStore {
       });
     }
 
-    const agents: AgentInfo[] = online.map((m, idx) => {
+    const ownerRoomById = new Map<string, string>();
+    primary.forEach((m, idx) => {
       const roomIdx = Math.floor(idx / DESKS_PER_ROOM);
-      const roomId = rooms[roomIdx]?.id ?? 'office-main';
+      ownerRoomById.set(m.id, rooms[roomIdx]?.id ?? 'office-main');
+    });
+
+    const agents: AgentInfo[] = online.map((m) => {
+      const roomId = m.ownerId
+        ? (ownerRoomById.get(m.ownerId) ?? rooms[0].id)
+        : (ownerRoomById.get(m.id) ?? rooms[0].id);
       const status: AgentStatus = m.lastStatus === 'offline' ? 'idle' : m.lastStatus;
       const pet = m.avatarMode === 'pet' && m.petId ? this.pets.getPet(m.petId) : undefined;
       const act = statusActivity(status === 'working' ? 'working' : status === 'waiting' ? 'waiting' : 'idle', m.statusSince);
@@ -845,6 +853,7 @@ export class PartyStore {
         ...(m.parts ? { parts: m.parts } : {}),
         ...(m.custom ? { custom: true as const } : {}),
         ...(pet ? { pet } : {}),
+        ...(m.ownerId ? { ownerId: m.ownerId } : {}),
         ...(m.agentTool ? { agentTool: m.agentTool } : {}),
       };
     });

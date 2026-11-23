@@ -385,8 +385,19 @@ export class Sidebar implements UiComponent {
     const li = h('li', { class: 'ui-node' }, head, subsWrap);
     const subs = new KeyedList<AgentInfo>(subsList, {
       key: (a) => a.id,
-      create: (a) => h('li', { class: 'ui-subs__item' }, createAgentRow(a, (id) => this.pick(id), 'sm')),
-      update: (li2, a) => this.updateRow(li2.firstElementChild as HTMLElement, a),
+      create: (a) => {
+        const rowEl = createAgentRow(a, (id) => this.pick(id), 'sm');
+        rowEl.classList.toggle('is-pet-sub', !!a.ownerId);
+        const item = h('li', { class: 'ui-subs__item' }, rowEl);
+        item.classList.toggle('is-pet', !!a.ownerId);
+        return item;
+      },
+      update: (li2, a) => {
+        li2.classList.toggle('is-pet', !!a.ownerId);
+        const rowEl = li2.firstElementChild as HTMLElement;
+        rowEl.classList.toggle('is-pet-sub', !!a.ownerId);
+        this.updateRow(rowEl, a);
+      },
     });
     this.nodeRefs.set(li, { row, head, term, subsWrap, subsCaption, subs });
     return li;
@@ -412,9 +423,17 @@ export class Sidebar implements UiComponent {
     }
     const has = n.subTotal > 0;
     setHidden(r.subsWrap, !has);
-    if (has) {
+    const allPets = has && n.subs.length > 0 && n.subs.every((s) => !!s.ownerId);
+    r.subsWrap.classList.toggle('is-pets', allPets);
+    setHidden(r.subsCaption, allPets);
+    if (has && !allPets) {
       const shown = n.subs.length;
-      setText(r.subsCaption, shown === n.subTotal ? plural(n.subTotal, tr('subagente'), tr('subagentes')) : `${shown} de ${plural(n.subTotal, tr('subagente'), tr('subagentes'))}`);
+      setText(
+        r.subsCaption,
+        shown === n.subTotal
+          ? plural(n.subTotal, tr('subagente'), tr('subagentes'))
+          : `${shown} de ${plural(n.subTotal, tr('subagente'), tr('subagentes'))}`,
+      );
     }
     r.subs.sync(n.subs);
   }

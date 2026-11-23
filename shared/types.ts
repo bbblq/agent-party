@@ -176,6 +176,8 @@ export interface AgentInfo {
   custom?: true;
   /** Optional Codex V2 / CoPets desktop pet assigned to this member. */
   pet?: AgentPetInfo;
+  /** Owner member ID when this agent is a user's companion pet. */
+  ownerId?: string;
   /** Specific AI agent tool used by this member (e.g. Codex, Antigravity, WorkBuddy, Claude Code). */
   agentTool?: string;
   /** Subagente rodando em segundo plano. */
