@@ -472,6 +472,8 @@ export class Sim {
     this.refreshShell(ch, this.now);
     // numa roda, ocioso <-> esperando shell não muda nada (segue na roda)
     if (ch.gathering && (mode === 'idle' || mode === 'shell') && (prev === 'idle' || prev === 'shell')) return;
+    // 正在宝可梦决斗场参赛或围观时，状态在 working/idle/wait 间切换不打断当前决斗，赛后自动按新状态回工位
+    if (this.arena.isBusy(ch.id) && mode !== 'leave' && mode !== 'deliver') return;
     // o trabalho chamou no meio de uma roda: avisa a turma antes de sair
     if (ch.gathering) this.social.calledAway(ch, prev, this.now);
     // comemoração/lamento do fim de um shell em andamento: termina (curta, volta à mesa) e o
@@ -1317,6 +1319,15 @@ export class Sim {
 
   /** Descarta a fila (e sai da roda, se estiver numa). */
   clearPlan(ch: Character): void {
+    if (ch.step?.t === 'stall') {
+      const spot = this.spots.get(ch.step.spot);
+      if (spot) this.stallBusy.delete(spot.furnitureId ?? spot.id);
+    }
+    if (!ch.leaving && !ch.arriving && ch.inside) {
+      ch.inside = false;
+      ch.alpha = 1;
+    }
+    ch.replan = false;
     ch.queue.length = 0;
     ch.step = null;
     ch.thinkAt = 0;

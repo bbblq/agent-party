@@ -487,8 +487,9 @@ export function drawArenaOverlay(
         line2 = tvW >= 42 ? `${sec} 秒` : `${sec}s`;
         line2Color = sec <= 10 ? '#fde047' : '#4ade80';
       } else {
-        line1 = tvW >= 54 ? '下场倒计时' : '下场';
-        line2 = '准备中';
+        line1 = tvW >= 54 ? '等待宝可梦' : '待机';
+        line2 = tvW >= 48 ? '需≥2只参赛' : '等选手';
+        line2Color = '#94a3b8';
       }
     } else if (st.phase === 'gather') {
       line1 = tvW >= 54 ? '即将开赛' : '开赛';

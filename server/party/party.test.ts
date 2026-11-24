@@ -910,4 +910,57 @@ describe('Pokémon Duel Arena layout, lifecycle & leaderboard persistence', () =
     expect(clientSim.arena.state.phase).toBe('gather');
     expect([clientSim.arena.state.leftId, clientSim.arena.state.rightId].sort()).toEqual(['p-psy', 'p-sno']);
   });
+
+  it('starts duels even when a Pokemon is working, ignores mid-duel status flips, and avoids 10-0 loop with <2 Pokemon', () => {
+    const dir = makeTempDir();
+    const pets = new PetRegistry(dir, null, null, join(process.cwd(), 'assets', 'default-pets'));
+    const store = new PartyStore({ dataDir: dir, pets });
+
+    const t0 = Date.UTC(2026, 5, 1, 12, 0, 0);
+    // Exact scenario reported on public deployment: 1 working Pokemon + 1 idle Pokemon + 1 non-Pokemon + 1 human
+    store.report({ id: 'human-1', name: '科比', status: 'idle' }, t0);
+    store.report({ id: 'npc:fish', name: '蓝色大肥鱼', status: 'idle', petId: 'dafeiyu' }, t0);
+    store.report({ id: 'npc:psy', name: '可达鸭', status: 'working', petId: 'psyduck-3d' }, t0);
+    store.report({ id: 'npc:sno', name: '卡比兽', status: 'idle', petId: 'snorlax' }, t0);
+
+    const sim = new Sim(stubArt, () => ({ ...DEFAULT_WORLD_OPTIONS, liveliness: 'lively' }), null);
+    sim.applySnapshot(store.toSnapshot(t0), t0);
+
+    // Step past initial duel delay (max 18s) -> duel must start instead of looping 10s->0
+    let now = t0;
+    for (let i = 0; i < 100 && sim.arena.state.phase === 'idle'; i++) {
+      now += 250;
+      sim.update(0.25, now);
+    }
+    expect(sim.arena.state.phase).toBe('gather');
+    expect(sim.arena.toSyncedState().nextDuelAt).toBeUndefined();
+    expect([sim.arena.state.leftId, sim.arena.state.rightId].sort()).toEqual(['npc:psy', 'npc:sno']);
+
+    // Reach fight phase
+    for (let i = 0; i < 100 && sim.arena.state.phase === 'gather'; i++) {
+      now += 200;
+      sim.update(0.2, now);
+    }
+    expect(sim.arena.state.phase).toBe('fight');
+
+    // Simulate NPC status toggling between working <-> idle mid-duel: must NOT cancel active duel
+    store.report({ id: 'npc:sno', name: '卡比兽', status: 'working', petId: 'snorlax' }, now + 100);
+    store.report({ id: 'npc:psy', name: '可达鸭', status: 'idle', petId: 'psyduck-3d' }, now + 100);
+    sim.applySnapshot(store.toSnapshot(now + 100), now + 100);
+    now += 200;
+    sim.update(0.2, now);
+    expect(sim.arena.state.phase).toBe('fight');
+
+    // Only 1 Pokemon in the office -> nextDuelAt stays undefined (never exposes a looping 10s->0 countdown)
+    store.report({ id: 'npc:psy', status: 'offline' }, now + 50);
+    const soloSim = new Sim(stubArt, () => DEFAULT_WORLD_OPTIONS, null);
+    soloSim.applySnapshot(store.toSnapshot(now + 100), now + 100);
+    let tSolo = now + 100;
+    for (let i = 0; i < 120; i++) {
+      tSolo += 250;
+      soloSim.update(0.25, tSolo);
+    }
+    expect(soloSim.arena.state.phase).toBe('idle');
+    expect(soloSim.arena.toSyncedState().nextDuelAt).toBeUndefined();
+  });
 });

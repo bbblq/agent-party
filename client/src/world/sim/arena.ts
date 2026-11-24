@@ -240,11 +240,11 @@ export class ArenaController {
         this.state.nextDuelAt = this.nextDuelAt;
         return;
       }
-      this.state.nextDuelAt = this.nextDuelAt;
       if (now < this.nextDuelAt) return;
       if (!this.tryStart(now)) {
-        this.nextDuelAt = now + 10_000;
-        this.state.nextDuelAt = this.nextDuelAt;
+        // 场上宝可梦不足 2 只时，不暴露虚假的 10 秒倒计时循环，后台每 5 秒检测一次
+        this.nextDuelAt = now + 5_000;
+        this.state.nextDuelAt = undefined;
       }
       return;
     }
@@ -446,6 +446,12 @@ export class ArenaController {
       for (const id of this.remoteParticipants) {
         const c = this.sim.chars.get(id);
         if (!c || c.gone) continue;
+        if (c.atSpot && c.atSpot.startsWith(ARENA_ID)) {
+          this.sim.spots.release(c.atSpot, c.id);
+          c.atSpot = null;
+          c.seated = false;
+          c.sortY = null;
+        }
         this.sim.clearPlan(c);
         c.nextOutingAt = now + 8_000 + Math.random() * 12_000;
       }
@@ -458,7 +464,7 @@ export class ArenaController {
   toSyncedState(): SyncedArenaState {
     return {
       ...this.state,
-      ...(this.nextDuelAt ? { nextDuelAt: this.nextDuelAt } : {}),
+      ...(this.state.nextDuelAt ? { nextDuelAt: this.state.nextDuelAt } : {}),
       watchers: [...this.state.watchers],
       ...(this.state.fx ? { fx: { ...this.state.fx } } : {}),
       leaderboard: this.state.leaderboard.slice(0, 6).map((e) => ({ ...e })),
@@ -489,7 +495,7 @@ export class ArenaController {
   // ------------------------------------------------------------------ internal lifecycle
 
   private isParticipantValid(ch: Character | undefined): boolean {
-    return !!ch && !ch.gone && !ch.leaving && ch.mode === 'idle';
+    return !!ch && !ch.gone && !ch.leaving;
   }
 
   private ringSpots(): { left: SpotDef; right: SpotDef } | null {
@@ -505,18 +511,31 @@ export class ArenaController {
     const spots = this.ringSpots();
     if (!spots) return false;
 
-    const fighters: Character[] = [];
+    const idleFighters: Character[] = [];
+    const workFighters: Character[] = [];
     for (const c of this.sim.chars.values()) {
-      if (c.gone || c.leaving || c.arriving || c.inside) continue;
-      if (c.mode !== 'idle') continue;
+      if (c.gone || c.leaving || c.arriving) continue;
       if (!isPokemonPet(c.info.pet)) continue;
-      fighters.push(c);
+      if (c.mode === 'idle' && !c.inside) {
+        idleFighters.push(c);
+      } else if (c.mode === 'work' || c.mode === 'idle' || c.mode === 'shell') {
+        workFighters.push(c);
+      }
     }
+    this.shuffle(idleFighters);
+    this.shuffle(workFighters);
+    const fighters = [...idleFighters, ...workFighters];
     if (fighters.length < 2) return false;
 
-    this.shuffle(fighters);
     const left = fighters[0];
     const right = fighters[1];
+
+    // 确保擂台两个站位无残留占用，并清除空闲倒计时
+    const leftOwner = this.sim.spots.ownerOf(spots.left.id);
+    if (leftOwner) this.sim.spots.release(spots.left.id, leftOwner);
+    const rightOwner = this.sim.spots.ownerOf(spots.right.id);
+    if (rightOwner) this.sim.spots.release(spots.right.id, rightOwner);
+    this.nextDuelAt = 0;
 
     // 先将两位选手置为 gather 状态，以免清空原闲逛计划时触发其他副作用
     this.state = {
@@ -791,6 +810,12 @@ export class ArenaController {
       for (const id of participants) {
         const c = this.sim.chars.get(id);
         if (!c || c.gone) continue;
+        if (c.atSpot && c.atSpot.startsWith(ARENA_ID)) {
+          this.sim.spots.release(c.atSpot, c.id);
+          c.atSpot = null;
+          c.seated = false;
+          c.sortY = null;
+        }
         this.sim.clearPlan(c);
         c.nextOutingAt = now + 8_000 + Math.random() * 12_000;
       }
