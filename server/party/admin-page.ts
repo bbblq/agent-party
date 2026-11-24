@@ -1,3 +1,85 @@
+import {
+  ACCESSORIES,
+  BOTTOM_STYLES,
+  FACIAL_HAIR,
+  HAIR_STYLES,
+  TOP_STYLES,
+} from '../../shared/appearance';
+import {
+  ACC_COLORS,
+  BOTTOMS,
+  HAIR_FUN,
+  HAIR_NATURAL,
+  JACKET_COLORS,
+  SHIRT_COLORS,
+  SKINS,
+  TOP_COLORS,
+} from '../../shared/world/appearance-flat';
+
+const ADMIN_CUSTOMIZE_DATA = JSON.stringify({
+  skins: SKINS,
+  hairStyles: HAIR_STYLES,
+  hairColors: [...HAIR_NATURAL.map(([c]) => c), ...HAIR_FUN],
+  facialHair: FACIAL_HAIR,
+  topStyles: TOP_STYLES,
+  topColors: TOP_COLORS,
+  shirtColors: SHIRT_COLORS,
+  jacketColors: JACKET_COLORS,
+  bottomStyles: BOTTOM_STYLES,
+  bottomColors: BOTTOMS.map(([c]) => c),
+  accessories: ACCESSORIES,
+  accColors: ACC_COLORS,
+  labels: {
+    hairStyle: {
+      short: '短发',
+      buzz: '寸头',
+      spiky: '刺猬头',
+      side_part: '偏分',
+      curly: '卷发',
+      afro: '爆炸头',
+      bob: '波波头',
+      long: '长发',
+      ponytail: '马尾',
+      bun: '丸子头',
+      pigtails: '双马尾',
+      mohawk: '莫西干',
+      bald: '光头',
+      wavy: '大波浪',
+    },
+    facialHair: {
+      none: '无胡须',
+      stubble: '胡茬',
+      beard: '络腮胡',
+      mustache: '八字胡',
+      goatee: '山羊胡',
+    },
+    topStyle: {
+      tshirt: 'T 恤',
+      hoodie: '连帽卫衣',
+      shirt_tie: '衬衫领带',
+      sweater: '针织毛衣',
+      jacket: '夹克外套',
+      blouse: '翻领衬衫',
+      polo: 'Polo 衫',
+    },
+    bottomStyle: {
+      pants: '长裤',
+      shorts: '短裤',
+      skirt: '短裙',
+    },
+    accessory: {
+      none: '无配饰',
+      glasses: '框架眼镜',
+      sunglasses: '墨镜',
+      headphones: '头戴耳机',
+      cap: '鸭舌帽',
+      beanie: '针织帽',
+      earrings: '耳环',
+      bow: '蝴蝶结',
+    },
+  },
+}).replaceAll('<', '\\u003c');
+
 export function renderAdminHtml(): string {
   return `<!doctype html>
 <html lang="zh-CN">
@@ -380,7 +462,68 @@ export function renderAdminHtml(): string {
             </div>
           </div>
 
+          <div id="npc-human-picker" hidden style="margin-bottom:14px;padding:14px;border-radius:12px;background:#0b0f17;border:1px solid var(--border)">
+            <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start">
+              <div style="display:flex;flex-direction:column;align-items:center;gap:8px;min-width:130px">
+                <canvas id="npc-human-preview" width="96" height="136" style="image-rendering:pixelated;border-radius:10px;background:#141b2b;border:1px solid var(--border)"></canvas>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center">
+                  <button class="btn btn-sm btn-primary" id="npc-look-m" type="button">👦 A</button>
+                  <button class="btn btn-sm" id="npc-look-f" type="button">👧 B</button>
+                  <button class="btn btn-sm" id="npc-look-reroll" type="button">🎲 随机</button>
+                </div>
+              </div>
+              <div style="flex:1;min-width:260px">
+                <div class="row" style="margin-bottom:10px">
+                  <div>
+                    <label for="npc-part-skin">肤色</label>
+                    <select id="npc-part-skin"></select>
+                  </div>
+                  <div>
+                    <label for="npc-part-hairStyle">发型</label>
+                    <select id="npc-part-hairStyle"></select>
+                  </div>
+                  <div>
+                    <label for="npc-part-hair">发色</label>
+                    <select id="npc-part-hair"></select>
+                  </div>
+                  <div>
+                    <label for="npc-part-facialHair">胡须</label>
+                    <select id="npc-part-facialHair"></select>
+                  </div>
+                </div>
+                <div class="row" style="margin-bottom:10px">
+                  <div>
+                    <label for="npc-part-topStyle">上衣款式</label>
+                    <select id="npc-part-topStyle"></select>
+                  </div>
+                  <div>
+                    <label for="npc-part-top">上衣主色</label>
+                    <select id="npc-part-top"></select>
+                  </div>
+                  <div>
+                    <label for="npc-part-bottomStyle">裤/裙款式</label>
+                    <select id="npc-part-bottomStyle"></select>
+                  </div>
+                  <div>
+                    <label for="npc-part-bottom">下装颜色</label>
+                    <select id="npc-part-bottom"></select>
+                  </div>
+                </div>
+                <div class="row" style="margin-bottom:0">
+                  <div>
+                    <label for="npc-part-accessory">配饰</label>
+                    <select id="npc-part-accessory"></select>
+                  </div>
+                  <div style="display:flex;align-items:flex-end">
+                    <span class="muted">生成后可在下方列表中复制专属代号或点「🎨 捏脸设置」精修全套细节。</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div id="npc-err" class="err" hidden></div>
+          <div id="npc-created-msg" class="muted" hidden style="margin:6px 0 10px"></div>
           <label style="display:inline-flex;align-items:center;gap:8px;margin:4px 0 12px;cursor:pointer;color:var(--text)">
             <input id="npc-can-duel" type="checkbox" style="width:auto" checked />
             <span>⚔️ 允许参加宝可梦决斗（宝可梦默认开启，人类或其他桌宠开启后可作为彩蛋上场对战）</span>
@@ -445,6 +588,7 @@ export function renderAdminHtml(): string {
   </div>
 
   <script>
+    const NPC_CUST = ${ADMIN_CUSTOMIZE_DATA};
     const KEY_STORAGE = 'agent_party_admin_key';
     let adminKey = sessionStorage.getItem(KEY_STORAGE) || '';
     let npcMode = 'pokemon';
@@ -578,14 +722,19 @@ export function renderAdminHtml(): string {
             const duelBtn = n.canDuel
               ? '<button class="btn btn-sm" style="border-color:rgba(250,204,21,0.55);color:#fde047" data-duel-toggle="' + esc(n.id) + '" data-duel-next="false">⚔️ 参战中</button>'
               : '<button class="btn btn-sm" style="opacity:0.78" data-duel-toggle="' + esc(n.id) + '" data-duel-next="true">🍿 仅围观 (点此开启)</button>';
+            const codeHint = n.editToken ? (' · 代号: <code>' + esc(n.editToken) + '</code>') : '';
+            const custBtn = n.avatarMode === 'human' && n.editToken
+              ? '<a class="btn btn-sm btn-primary" href="/customize/' + encodeURIComponent(n.editToken) + '" target="_blank">🎨 捏脸设置</a>'
+              : '';
             return '<tr>' +
-              '<td><strong>' + esc(n.name) + '</strong><div class="muted">' + esc(n.role) + '</div></td>' +
+              '<td><strong>' + esc(n.name) + '</strong><div class="muted">' + esc(n.role) + codeHint + '</div></td>' +
               '<td>' + lookLabel + '</td>' +
               '<td>' + modeLabel + '</td>' +
               '<td>' + statusPill(n.lastStatus) + '</td>' +
               '<td>' + duelBtn + '</td>' +
               '<td><div class="actions">' +
                 '<button class="btn btn-sm" data-npc-toggle="' + esc(n.id) + '" data-next="' + (n.lastStatus === 'working' ? 'idle' : 'working') + '">' + (n.lastStatus === 'working' ? '去摸鱼' : '去办公') + '</button>' +
+                custBtn +
                 (n.avatarMode === 'human' ? '<button class="btn btn-sm" data-npc-reroll="' + esc(n.id) + '">换个造型</button>' : '') +
                 '<button class="btn btn-sm btn-danger" data-npc-del="' + esc(n.id) + '">删除</button>' +
               '</div></td>' +
@@ -601,17 +750,22 @@ export function renderAdminHtml(): string {
         ? members.map((m) => {
             const lookLabel = m.avatarMode === 'pet' ? ('🐾 ' + esc(m.petId)) : '🧑 像素小人';
             const ownerSub = m.ownerId ? (' · 伴随宠物 (所属 ' + esc(m.ownerId) + ')') : '';
+            const codeHint = !m.ownerId && m.editToken ? (' · 代号: <code>' + esc(m.editToken) + '</code>') : '';
+            const custBtn = !m.ownerId && m.editToken
+              ? '<a class="btn btn-sm" href="/customize/' + encodeURIComponent(m.editToken) + '" target="_blank">🎨 捏脸</a>'
+              : '';
             const duelBtn = m.canDuel
               ? '<button class="btn btn-sm" style="border-color:rgba(250,204,21,0.55);color:#fde047" data-duel-toggle="' + esc(m.id) + '" data-duel-next="false">⚔️ 参战中</button>'
               : '<button class="btn btn-sm" style="opacity:0.78" data-duel-toggle="' + esc(m.id) + '" data-duel-next="true">🍿 仅围观 (点此开启)</button>';
             return '<tr>' +
-              '<td><strong>' + esc(m.name) + '</strong><div class="muted">ID: ' + esc(m.id) + ' · ' + esc(m.role) + ownerSub + '</div></td>' +
+              '<td><strong>' + esc(m.name) + '</strong><div class="muted">ID: ' + esc(m.id) + ' · ' + esc(m.role) + ownerSub + codeHint + '</div></td>' +
               '<td>' + (m.agentTool ? '<span class="pill tool">' + esc(m.agentTool) + '</span>' : '<span class="muted">-</span>') + '</td>' +
               '<td>' + lookLabel + '</td>' +
               '<td>' + statusPill(m.lastStatus) + '</td>' +
               '<td>' + duelBtn + '</td>' +
               '<td class="muted">' + fmtTime(m.lastSeenAt) + '</td>' +
               '<td><div class="actions">' +
+                custBtn +
                 '<button class="btn btn-sm btn-warn" data-kick="' + esc(m.id) + '">移出</button>' +
                 '<button class="btn btn-sm btn-danger" data-ban="' + esc(m.id) + '">移出并封禁</button>' +
               '</div></td>' +
@@ -681,12 +835,137 @@ export function renderAdminHtml(): string {
       }
     });
 
+    const npcHumanState = {
+      look: 'm',
+      seed: 20261124,
+      parts: {
+        skin: NPC_CUST.skins[1] || NPC_CUST.skins[0],
+        hairStyle: 'short',
+        hair: NPC_CUST.hairColors[0],
+        facialHair: 'none',
+        topStyle: 'hoodie',
+        top: NPC_CUST.topColors[1] || NPC_CUST.topColors[0],
+        bottomStyle: 'pants',
+        bottom: NPC_CUST.bottomColors[0],
+        accessory: 'none',
+      },
+    };
+
+    function npcTopPalette(style) {
+      if (style === 'shirt_tie') return NPC_CUST.shirtColors;
+      if (style === 'jacket') return NPC_CUST.jacketColors;
+      return NPC_CUST.topColors;
+    }
+
+    function fillNpcSelect(selectId, list, labelMap, selectedVal, isColor) {
+      const sel = $(selectId);
+      if (!sel) return;
+      sel.innerHTML = '';
+      list.forEach((val, idx) => {
+        const opt = document.createElement('option');
+        opt.value = val;
+        opt.textContent = isColor
+          ? ('色号 #' + (idx + 1) + ' (' + val + ')')
+          : ((labelMap && labelMap[val]) || val);
+        sel.append(opt);
+      });
+      sel.value = list.includes(selectedVal) ? selectedVal : list[0];
+    }
+
+    let npcPreviewSeq = 0;
+    async function refreshNpcHumanPreview() {
+      const c = $('npc-human-preview');
+      if (!c) return;
+      $('npc-look-m').classList.toggle('btn-primary', npcHumanState.look === 'm');
+      $('npc-look-f').classList.toggle('btn-primary', npcHumanState.look === 'f');
+      const seq = ++npcPreviewSeq;
+      const qs = new URLSearchParams({
+        seed: String(npcHumanState.seed >>> 0),
+        look: npcHumanState.look,
+        parts: JSON.stringify(npcHumanState.parts),
+      });
+      try {
+        const res = await fetch('/api/character/frame?' + qs.toString());
+        if (!res.ok) return;
+        const data = await res.json();
+        if (seq !== npcPreviewSeq || !data || !data.rgbaBase64) return;
+        const bin = atob(data.rgbaBase64);
+        const raw = new Uint8ClampedArray(bin.length);
+        for (let i = 0; i < bin.length; i++) raw[i] = bin.charCodeAt(i);
+        const off = document.createElement('canvas');
+        off.width = data.width;
+        off.height = data.height;
+        off.getContext('2d').putImageData(new ImageData(raw, data.width, data.height), 0, 0);
+        const ctx = c.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+        ctx.clearRect(0, 0, c.width, c.height);
+        ctx.drawImage(off, 0, 0, c.width, c.height);
+      } catch {}
+    }
+
+    function syncNpcHumanControls() {
+      const tp = npcTopPalette(npcHumanState.parts.topStyle);
+      if (!tp.includes(npcHumanState.parts.top)) npcHumanState.parts.top = tp[0];
+      fillNpcSelect('npc-part-skin', NPC_CUST.skins, null, npcHumanState.parts.skin, true);
+      fillNpcSelect('npc-part-hairStyle', NPC_CUST.hairStyles, NPC_CUST.labels.hairStyle, npcHumanState.parts.hairStyle, false);
+      fillNpcSelect('npc-part-hair', NPC_CUST.hairColors, null, npcHumanState.parts.hair, true);
+      fillNpcSelect('npc-part-facialHair', NPC_CUST.facialHair, NPC_CUST.labels.facialHair, npcHumanState.parts.facialHair, false);
+      fillNpcSelect('npc-part-topStyle', NPC_CUST.topStyles, NPC_CUST.labels.topStyle, npcHumanState.parts.topStyle, false);
+      fillNpcSelect('npc-part-top', tp, null, npcHumanState.parts.top, true);
+      fillNpcSelect('npc-part-bottomStyle', NPC_CUST.bottomStyles, NPC_CUST.labels.bottomStyle, npcHumanState.parts.bottomStyle, false);
+      fillNpcSelect('npc-part-bottom', NPC_CUST.bottomColors, null, npcHumanState.parts.bottom, true);
+      fillNpcSelect('npc-part-accessory', NPC_CUST.accessories, NPC_CUST.labels.accessory, npcHumanState.parts.accessory, false);
+      void refreshNpcHumanPreview();
+    }
+
+    ['skin', 'hairStyle', 'hair', 'facialHair', 'topStyle', 'top', 'bottomStyle', 'bottom', 'accessory'].forEach((key) => {
+      const sel = $('npc-part-' + key);
+      if (!sel) return;
+      sel.addEventListener('change', () => {
+        npcHumanState.parts[key] = sel.value;
+        if (key === 'topStyle') {
+          const tp = npcTopPalette(npcHumanState.parts.topStyle);
+          if (!tp.includes(npcHumanState.parts.top)) npcHumanState.parts.top = tp[0];
+          fillNpcSelect('npc-part-top', tp, null, npcHumanState.parts.top, true);
+        }
+        void refreshNpcHumanPreview();
+      });
+    });
+
+    $('npc-look-m').addEventListener('click', () => {
+      npcHumanState.look = 'm';
+      void refreshNpcHumanPreview();
+    });
+    $('npc-look-f').addEventListener('click', () => {
+      npcHumanState.look = 'f';
+      void refreshNpcHumanPreview();
+    });
+    $('npc-look-reroll').addEventListener('click', () => {
+      const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+      npcHumanState.look = Math.random() < 0.5 ? 'm' : 'f';
+      npcHumanState.seed = (Math.floor(Math.random() * 0xffffffff) >>> 0) || 1;
+      npcHumanState.parts.skin = pick(NPC_CUST.skins);
+      npcHumanState.parts.hairStyle = pick(NPC_CUST.hairStyles);
+      npcHumanState.parts.hair = pick(NPC_CUST.hairColors);
+      npcHumanState.parts.facialHair = npcHumanState.look === 'm' && Math.random() < 0.25 ? pick(NPC_CUST.facialHair) : 'none';
+      npcHumanState.parts.topStyle = pick(NPC_CUST.topStyles);
+      npcHumanState.parts.top = pick(npcTopPalette(npcHumanState.parts.topStyle));
+      npcHumanState.parts.bottomStyle = pick(NPC_CUST.bottomStyles);
+      npcHumanState.parts.bottom = pick(NPC_CUST.bottomColors);
+      npcHumanState.parts.accessory = Math.random() < 0.5 ? 'none' : pick(NPC_CUST.accessories);
+      syncNpcHumanControls();
+    });
+
+    syncNpcHumanControls();
+
     document.querySelectorAll('.tab').forEach((btn) => {
       btn.addEventListener('click', () => {
         npcMode = btn.dataset.mode;
         document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b === btn));
         $('npc-pokemon-picker').hidden = npcMode !== 'pokemon';
         $('npc-pet-picker').hidden = npcMode !== 'pet';
+        $('npc-human-picker').hidden = npcMode !== 'human';
+        if (npcMode === 'human') void refreshNpcHumanPreview();
         if (npcMode === 'pokemon') {
           $('npc-can-duel').checked = true;
         } else if (npcMode === 'human') {
@@ -864,7 +1143,9 @@ export function renderAdminHtml(): string {
     $('npc-form').addEventListener('submit', async (ev) => {
       ev.preventDefault();
       const errEl = $('npc-err');
+      const createdEl = $('npc-created-msg');
       errEl.hidden = true;
+      if (createdEl) createdEl.hidden = true;
       const beh = $('npc-behavior').value;
       const isPetMode = npcMode === 'pet' || npcMode === 'pokemon';
       const chosenPetId = npcMode === 'pokemon' ? selectedPokemonPetId : selectedPetId;
@@ -878,18 +1159,26 @@ export function renderAdminHtml(): string {
         role: $('npc-role').value.trim() || '常驻 NPC',
         agentTool: $('npc-tool').value.trim() || 'NPC',
         avatarMode: isPetMode ? 'pet' : 'human',
-        ...(isPetMode ? { petId: chosenPetId } : {}),
+        ...(isPetMode
+          ? { petId: chosenPetId }
+          : { look: npcHumanState.look, seed: npcHumanState.seed >>> 0, parts: npcHumanState.parts }),
         canDuel: $('npc-can-duel').checked,
         status: beh === 'working' ? 'working' : 'idle',
         npcAuto: beh === 'auto',
       };
       try {
-        await api('/api/admin/npcs', {
+        const res = await api('/api/admin/npcs', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
         $('npc-name').value = '';
+        if (createdEl && res && res.npc && res.npc.editToken) {
+          const code = res.npc.editToken;
+          createdEl.hidden = false;
+          createdEl.style.color = 'var(--ok)';
+          createdEl.innerHTML = '✅ 已创建 <strong>' + esc(res.npc.name) + '</strong> · 专属代号: <code>' + esc(code) + '</code> · <a href="/customize/' + encodeURIComponent(code) + '" target="_blank" style="color:var(--accent)">打开专属捏脸页面 🎨</a>';
+        }
         await loadState();
       } catch (e) {
         errEl.textContent = e.message;

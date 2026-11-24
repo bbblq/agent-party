@@ -279,7 +279,7 @@ export class PartyStore {
             ...m,
             sessions: m.sessions && typeof m.sessions === 'object' ? m.sessions : {},
           };
-          if (!rec.isNpc && !rec.ownerId && !rec.editToken) {
+          if (!rec.ownerId && !rec.editToken) {
             rec.editToken = this.generateUniqueEditToken();
             this.dirty = true;
           }
@@ -757,7 +757,7 @@ export class PartyStore {
     const token = extractEditToken(rawCode) ?? trimmed;
     if (!token) return undefined;
     for (const m of this.members.values()) {
-      if (!m.isNpc && !m.ownerId && m.editToken === token) {
+      if (!m.ownerId && m.editToken === token) {
         return m;
       }
     }
@@ -964,6 +964,9 @@ export class PartyStore {
     role?: string;
     avatarMode?: 'pet' | 'human';
     petId?: string;
+    look?: 'f' | 'm';
+    seed?: number;
+    parts?: unknown;
     status?: 'idle' | 'working';
     npcAuto?: boolean;
     canDuel?: boolean;
@@ -988,15 +991,20 @@ export class PartyStore {
     const status: 'idle' | 'working' = input.status === 'working' ? 'working' : 'idle';
     const canDuel =
       typeof input.canDuel === 'boolean' ? input.canDuel : defaultCanDuel(avatarMode, petId, petInfo);
+    const customLook = input.look === 'f' || input.look === 'm' ? input.look : (Math.random() < 0.5 ? 'f' : 'm');
+    const customSeed = parseSeed(input.seed) ?? randomSeed();
+    const customParts = avatarMode === 'human' && input.parts !== undefined ? parseAppearanceParts(input.parts) : null;
     const npc: MemberRecord = {
       id,
       name,
       role: cleanText(input.role, 32) ?? '常驻 NPC',
-      seed: randomSeed(),
-      look: Math.random() < 0.5 ? 'f' : 'm',
+      seed: customSeed,
+      look: customLook,
+      ...(customParts && Object.keys(customParts).length > 0 ? { parts: customParts } : {}),
       custom: true,
       avatarMode,
       ...(petId ? { petId } : {}),
+      editToken: this.generateUniqueEditToken(),
       canDuel,
       agentTool: cleanText(input.agentTool, 24) ?? 'NPC',
       isNpc: true,
@@ -1020,6 +1028,9 @@ export class PartyStore {
       role?: string;
       avatarMode?: 'pet' | 'human';
       petId?: string | null;
+      look?: 'f' | 'm';
+      seed?: number;
+      parts?: unknown;
       status?: 'idle' | 'working';
       npcAuto?: boolean;
       canDuel?: boolean;
@@ -1030,6 +1041,7 @@ export class PartyStore {
   ): { ok: true; npc: MemberRecord } | { ok: false; error: string; statusCode: number } {
     const m = this.members.get(id);
     if (!m || !m.isNpc) return { ok: false, error: '未找到该 NPC。', statusCode: 404 };
+    if (!m.editToken) m.editToken = this.generateUniqueEditToken();
 
     if (patch.name !== undefined) {
       const n = cleanText(patch.name, 32);
@@ -1046,6 +1058,18 @@ export class PartyStore {
       m.seed = randomSeed();
       m.look = Math.random() < 0.5 ? 'f' : 'm';
       delete m.parts;
+    }
+    if (patch.look === 'f' || patch.look === 'm') {
+      m.look = patch.look;
+    }
+    const parsedSeed = parseSeed(patch.seed);
+    if (parsedSeed !== null) {
+      m.seed = parsedSeed;
+    }
+    if (patch.parts !== undefined) {
+      const parsedParts = parseAppearanceParts(patch.parts);
+      if (parsedParts && Object.keys(parsedParts).length > 0) m.parts = parsedParts;
+      else delete m.parts;
     }
     let lookChanged = false;
     if (patch.avatarMode === 'human') {
@@ -1190,6 +1214,15 @@ export class PartyStore {
   }
 
   getAdminState() {
+    let generatedToken = false;
+    for (const m of this.members.values()) {
+      if (!m.ownerId && !m.editToken) {
+        m.editToken = this.generateUniqueEditToken();
+        generatedToken = true;
+      }
+    }
+    if (generatedToken) this.scheduleSave();
+
     const members = [...this.members.values()]
       .filter((m) => !m.isNpc)
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt)

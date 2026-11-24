@@ -695,7 +695,8 @@ export function renderCustomizeHtml(baseUrl: string, initialCode = ''): string {
       const petHint = profile.companionFullName
         ? (' · 宠物：' + profile.companionFullName)
         : (profile.companionPetName ? (' · 宠物：' + profile.companionPetName) : ' · 暂未携带宠物');
-      setIdentityBanner('ok', '✅ 已识别：' + (profile.name || profile.id) + '（' + (profile.role || 'AI 伙伴') + '）' + petHint);
+      const prefix = profile.isNpc ? '✅ 已识别 NPC：' : '✅ 已识别：';
+      setIdentityBanner('ok', prefix + (profile.name || profile.id) + '（' + (profile.role || 'AI 伙伴') + '）' + petHint);
       $('direct-link-row').style.display = recognizedCode ? 'block' : 'none';
 
       if (recognizedCode && typeof history !== 'undefined' && typeof location !== 'undefined' && location.protocol.startsWith('http')) {

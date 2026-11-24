@@ -12,6 +12,7 @@ import type { SpotDef } from '../../client/src/world/layout/types';
 import { chooseSeat, lacksBackView } from '../../client/src/world/sim/behavior';
 import { decodeAppearanceCode, encodeAppearanceCode } from '../../shared/appearance';
 import { DUEL_COOLDOWN_MS, DUEL_DURATION_MS, isPokemonPet } from '../../client/src/world/sim/arena';
+import { renderAdminHtml } from './admin-page';
 import { renderCustomizeHtml } from './customize-page';
 import { slotAt } from '../../client/src/world/layout/geometry';
 import { canEditCharacter } from '../../client/src/ui/character-model';
@@ -1119,5 +1120,53 @@ describe('Pokémon Duel Arena layout, lifecycle & leaderboard persistence', () =
     expect(scriptMatch).toBeTruthy();
     expect(() => new Function(scriptMatch![1])).not.toThrow();
     expect(renderReportScript('https://agent.ipil.space')).toContain('customizeCode');
+
+    // Admin human NPC creation assigns ap_... code, respects initial parts, and can be customized by editToken
+    const npcRes = store.createNpc(
+      {
+        name: '前台小美',
+        role: '前台接待',
+        avatarMode: 'human',
+        look: 'f',
+        seed: 999,
+        parts: { hairStyle: 'bob', topStyle: 'blouse', accessory: 'bow' },
+      },
+      t0 + 3000,
+    );
+    expect(npcRes.ok).toBe(true);
+    if (!npcRes.ok) return;
+    const npcToken = npcRes.npc.editToken!;
+    expect(npcToken).toMatch(/^ap_[A-Za-z0-9]{12}$/);
+    expect(npcRes.npc.look).toBe('f');
+    expect(npcRes.npc.parts?.hairStyle).toBe('bob');
+
+    const loadedNpc = store.getMemberByEditToken(npcToken);
+    expect(loadedNpc.ok).toBe(true);
+    if (!loadedNpc.ok) return;
+    expect(loadedNpc.member.isNpc).toBe(true);
+    expect(loadedNpc.resolvedParts.hairStyle).toBe('bob');
+
+    const editedNpc = store.updateMemberByEditToken(
+      npcToken,
+      {
+        name: '前台小美改',
+        role: '首席接待',
+        parts: { hairStyle: 'long', topStyle: 'jacket', accessory: 'glasses' },
+      },
+      t0 + 4000,
+    );
+    expect(editedNpc.ok).toBe(true);
+    if (!editedNpc.ok) return;
+    expect(editedNpc.member.isNpc).toBe(true);
+    expect(editedNpc.member.name).toBe('前台小美改');
+    expect(editedNpc.resolvedParts.hairStyle).toBe('long');
+    expect(store.getAdminState().npcs.some((n) => n.editToken === npcToken)).toBe(true);
+
+    const adminHtml = renderAdminHtml();
+    expect(adminHtml).toContain('npc-human-picker');
+    expect(adminHtml).toContain('🎨 捏脸设置');
+    const adminScript = /<script>([\s\S]*?)<\/script>/.exec(adminHtml);
+    expect(adminScript).toBeTruthy();
+    expect(() => new Function(adminScript![1])).not.toThrow();
   });
 });
