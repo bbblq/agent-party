@@ -5,9 +5,13 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { join } from 'node:path';
+import { appearanceFromSeed } from '../client/src/art/character/appearance';
+import { renderCharacter } from '../client/src/art/character/render';
+import { decodeAppearanceCode, parseAppearanceParts, parseSeed } from '../shared/appearance';
 import { createStaticHandler } from './http/static';
 import { renderAdminHtml } from './party/admin-page';
 import { renderReportScript, renderWatchScript } from './party/client-scripts';
+import { renderCustomizeHtml } from './party/customize-page';
 import { parseBoundary, parseMultipart } from './party/multipart';
 import { MAX_PET_SPRITE_BYTES, PetRegistry } from './party/pets';
 import { PokemonService, searchPokemon } from './party/pokemon';
@@ -241,6 +245,10 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
   // ---- Agent Status Report (Privacy-First: status only)
   if (method === 'POST' && p === '/api/report') {
     const body = await readJson<ReportInput & { pokemon?: string; companionPokemon?: string }>(req);
+    const decodedApp = body.appearanceCode ? decodeAppearanceCode(body.appearanceCode) : null;
+    if (decodedApp?.companionPokemon && !body.companionPokemon && !body.companionPetId) {
+      body.companionPokemon = decodedApp.companionPokemon;
+    }
     if (typeof body.pokemon === 'string' && body.pokemon.trim() && !body.petId) {
       const pRes = await pokemon.ensurePokemonPet(body.pokemon);
       if (pRes.ok) body.petId = pRes.pet.id;
@@ -406,7 +414,33 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     return true;
   }
 
-  // ---- Setup & Client Scripts
+  // ---- Setup, Self-Service Customizer & Client Scripts
+  if (method === 'GET' && (p === '/customize' || p === '/customize.html')) {
+    sendText(res, 200, renderCustomizeHtml(getBaseUrl(req)), 'text/html; charset=utf-8');
+    return true;
+  }
+  if (method === 'GET' && p === '/api/character/frame') {
+    const rawSeed = Number(url.searchParams.get('seed'));
+    const seed = parseSeed(Number.isFinite(rawSeed) ? rawSeed : 0) ?? 20261124;
+    const look = url.searchParams.get('look') === 'f' ? 'f' : 'm';
+    let parts = undefined;
+    const rawParts = url.searchParams.get('parts');
+    if (rawParts) {
+      try {
+        parts = parseAppearanceParts(JSON.parse(rawParts)) ?? undefined;
+      } catch {
+        parts = undefined;
+      }
+    }
+    const appearance = appearanceFromSeed(seed, { look, parts });
+    const sprite = renderCharacter({ appearance, dir: 'down', pose: 'stand', frame: 0 });
+    sendJson(res, 200, {
+      width: sprite.buf.w,
+      height: sprite.buf.h,
+      rgbaBase64: Buffer.from(sprite.buf.data).toString('base64'),
+    });
+    return true;
+  }
   if (method === 'GET' && p === '/setup') {
     sendText(res, 200, renderSetupHtml(getBaseUrl(req)), 'text/html; charset=utf-8');
     return true;
@@ -487,6 +521,16 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
         receptionSign: store.getReceptionSign(),
         officeSettings: store.getOfficeSettings(),
       });
+      return true;
+    }
+
+    const duelMatch = /^\/api\/admin\/members\/([^/]+)\/duel$/.exec(p);
+    if ((method === 'PATCH' || method === 'POST') && duelMatch) {
+      const id = decodeURIComponent(duelMatch[1]);
+      const body = await readJson<{ canDuel?: boolean }>(req);
+      const r = store.setMemberCanDuel(id, !!body.canDuel);
+      if (!r.ok) sendJson(res, r.statusCode, { error: r.error });
+      else sendJson(res, 200, { ok: true, canDuel: r.canDuel });
       return true;
     }
 

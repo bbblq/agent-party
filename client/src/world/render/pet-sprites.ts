@@ -227,10 +227,11 @@ export function resolveCodexFrame(opts: {
   states: Partial<Record<string, CodexV2StateSpec>>;
   actualRows: number;
   actualCols: number;
+  hasBackView?: boolean;
 }): ResolvedCodexFrame {
   const row9 = opts.states['look_directions_1_8']?.row ?? 9;
   const row10 = opts.states['look_directions_9_16']?.row ?? 10;
-  const hasGazeRows = opts.actualRows > Math.max(row9, row10) && opts.actualCols >= 8;
+  const hasGazeRows = (opts.hasBackView ?? true) && opts.actualRows > Math.max(row9, row10) && opts.actualCols >= 8;
   const t = Math.max(0, opts.animT);
 
   if (hasGazeRows) {
@@ -435,6 +436,7 @@ export function drawCodexPetFrame(
     states,
     actualRows,
     actualCols,
+    hasBackView: pet.hasBackView === true,
   });
 
   const sx = resolved.col * fw;

@@ -436,6 +436,12 @@ export class Sim {
         if (ch.atSpot === home.id) this.interrupt(ch);
       }
     }
+    if (ch.atSpot && !ch.leaving) {
+      const curSpot = this.spots.get(ch.atSpot);
+      if (curSpot && !this.canUseSeat(ch, curSpot)) {
+        this.interrupt(ch);
+      }
+    }
     const act = a.activity;
     if (act && act.id !== ch.lastActivityId) {
       const firstSeen = ch.lastActivityId === null;
@@ -644,7 +650,7 @@ export class Sim {
   }
 
   canUseSeat(ch: Character, s: SpotDef): boolean {
-    return !(lacksBackView(ch.info.pet) && s.seated && s.dir === 'up');
+    return !(lacksBackView(ch.info.pet) && s.dir === 'up');
   }
 
   /** Reserva mesa (ou banqueta/ponto em pé) na sala do personagem. */

@@ -50,6 +50,7 @@ async function main() {
   let cliSession = '';
   let cliCompanionPet = '';
   let cliCompanionName = '';
+  let cliAppearance = '';
 
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -59,10 +60,40 @@ async function main() {
     else if (a === '--session' && args[i + 1]) cliSession = args[++i];
     else if (a === '--companion-pet' && args[i + 1]) cliCompanionPet = args[++i];
     else if (a === '--companion-name' && args[i + 1]) cliCompanionName = args[++i];
+    else if ((a === '--appearance' || a === '--code') && args[i + 1]) cliAppearance = args[++i];
     else if (!a.startsWith('-')) status = a;
   }
 
-  const cfg = loadJson(CONFIG_PATH) || {};
+  let cfg = loadJson(CONFIG_PATH) || {};
+  if (cliAppearance) {
+    const m = /\\bAP1:([A-Za-z0-9_-]+)/.exec(cliAppearance.trim());
+    if (m) {
+      try {
+        let b64 = m[1].replaceAll('-', '+').replaceAll('_', '/');
+        while (b64.length % 4) b64 += '=';
+        const parsed = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'));
+        if (parsed && typeof parsed === 'object') {
+          if (parsed.name) cfg.name = String(parsed.name).slice(0, 32);
+          if (!cfg.id && cfg.name) cfg.id = cfg.name;
+          if (parsed.role) cfg.role = String(parsed.role).slice(0, 32);
+          if (parsed.look === 'f' || parsed.look === 'm') cfg.look = parsed.look;
+          if (typeof parsed.seed === 'number') cfg.seed = parsed.seed >>> 0;
+          if (parsed.parts && typeof parsed.parts === 'object') cfg.parts = parsed.parts;
+          if (parsed.companionPokemon) cfg.companionPokemon = String(parsed.companionPokemon).slice(0, 40);
+          if (parsed.companionPetId) cfg.companionPetId = String(parsed.companionPetId).slice(0, 48);
+          if (parsed.companionPetName) cfg.companionPetName = String(parsed.companionPetName).slice(0, 24);
+          cfg.appearanceCode = 'AP1:' + m[1];
+          mkdirSync(DIR, { recursive: true });
+          writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
+        }
+      } catch (err) {
+        if (verify) {
+          console.error('❌ 无法解析 AP1:... 捏脸代码:', err && err.message ? err.message : String(err));
+          process.exit(1);
+        }
+      }
+    }
+  }
   const serverUrl = String(cfg.serverUrl || FALLBACK_URL).replace(/\\/+$/, '');
   const id = String(cfg.id || cfg.name || '').trim();
   if (!id) {
@@ -116,6 +147,10 @@ async function main() {
     role: cfg.role || 'AI 伙伴',
     status,
     sessionId,
+    ...(cfg.look === 'f' || cfg.look === 'm' ? { look: cfg.look } : {}),
+    ...(typeof cfg.seed === 'number' ? { seed: cfg.seed >>> 0 } : {}),
+    ...(cfg.parts && typeof cfg.parts === 'object' ? { parts: cfg.parts } : {}),
+    ...(cfg.appearanceCode ? { appearanceCode: cfg.appearanceCode } : {}),
     ...(cfg.petId ? { petId: cfg.petId } : {}),
     ...(companionPetId ? { companionPetId } : {}),
     ...(companionPetName ? { companionPetName } : {}),

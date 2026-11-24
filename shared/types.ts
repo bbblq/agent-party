@@ -178,6 +178,8 @@ export interface AgentInfo {
   pet?: AgentPetInfo;
   /** Owner member ID when this agent is a user's companion pet. */
   ownerId?: string;
+  /** Whether this character is eligible to participate in the Pokémon Duel Arena. */
+  canDuel?: boolean;
   /** Specific AI agent tool used by this member (e.g. Codex, Antigravity, WorkBuddy, Claude Code). */
   agentTool?: string;
   /** Subagente rodando em segundo plano. */

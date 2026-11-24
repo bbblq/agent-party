@@ -12,7 +12,7 @@ export function lacksBackView(pet?: AgentPetInfo): boolean {
   if (pet.kind === 'pmd' && pet.pmd) {
     return ![pet.pmd.walk, pet.pmd.idle, pet.pmd.hop].some((a) => !!a && a.rows >= 5);
   }
-  return (pet.spec?.gridRows ?? 11) < 11;
+  return true;
 }
 
 /**

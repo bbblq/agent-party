@@ -90,3 +90,91 @@ export function nameKey(name: string): string {
 export function partsKey(parts: AppearanceParts | undefined): string {
   return parts ? PART_KEYS.map((k) => parts[k] ?? '').join(',') : '';
 }
+
+export interface CustomAppearancePayload {
+  v: 1;
+  name?: string;
+  role?: string;
+  look?: 'f' | 'm';
+  seed?: number;
+  parts?: AppearanceParts;
+  companionPokemon?: string;
+  companionPetId?: string;
+  companionPetName?: string;
+}
+
+function utf8ToBase64Url(str: string): string {
+  const bytes = new TextEncoder().encode(str);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/g, '');
+}
+
+function base64UrlToUtf8(b64u: string): string | null {
+  try {
+    let b64 = b64u.replaceAll('-', '+').replaceAll('_', '/');
+    while (b64.length % 4) b64 += '=';
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+function cleanOptionalText(v: unknown, max: number): string | undefined {
+  if (typeof v !== 'string') return undefined;
+  const s = v.normalize('NFC').replace(/[\r\n\t]+/g, ' ').trim();
+  if (!s || CONTROL.test(s)) return undefined;
+  return s.slice(0, max);
+}
+
+/** 将捏脸数据编码为跨对话可粘贴的短代码字符串（AP1:...）。 */
+export function encodeAppearanceCode(input: Omit<CustomAppearancePayload, 'v'>): string {
+  const payload: CustomAppearancePayload = {
+    v: 1,
+    ...(cleanOptionalText(input.name, 32) ? { name: cleanOptionalText(input.name, 32) } : {}),
+    ...(cleanOptionalText(input.role, 32) ? { role: cleanOptionalText(input.role, 32) } : {}),
+    ...(input.look === 'f' || input.look === 'm' ? { look: input.look } : {}),
+    ...(parseSeed(input.seed) !== null ? { seed: input.seed } : {}),
+    ...(input.parts && Object.keys(input.parts).length ? { parts: parseAppearanceParts(input.parts) ?? undefined } : {}),
+    ...(cleanOptionalText(input.companionPokemon, 40) ? { companionPokemon: cleanOptionalText(input.companionPokemon, 40) } : {}),
+    ...(cleanOptionalText(input.companionPetId, 48) ? { companionPetId: cleanOptionalText(input.companionPetId, 48) } : {}),
+    ...(cleanOptionalText(input.companionPetName, 24) ? { companionPetName: cleanOptionalText(input.companionPetName, 24) } : {}),
+  };
+  return `AP1:${utf8ToBase64Url(JSON.stringify(payload))}`;
+}
+
+/** 解析用户从本地 HTML 或网页工坊复制回来的 AP1:... 捏脸代码。 */
+export function decodeAppearanceCode(raw: unknown): CustomAppearancePayload | null {
+  if (typeof raw !== 'string') return null;
+  const m = /\bAP1:([A-Za-z0-9_-]+)/.exec(raw.trim());
+  if (!m) return null;
+  const jsonText = base64UrlToUtf8(m[1]);
+  if (!jsonText) return null;
+  let obj: unknown;
+  try {
+    obj = JSON.parse(jsonText);
+  } catch {
+    return null;
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+  const src = obj as Record<string, unknown>;
+  const parts = src.parts !== undefined ? parseAppearanceParts(src.parts) : undefined;
+  if (src.parts !== undefined && !parts) return null;
+  const seed = src.seed !== undefined ? parseSeed(src.seed) : undefined;
+  if (src.seed !== undefined && seed === null) return null;
+  const look = src.look === 'f' || src.look === 'm' ? src.look : undefined;
+  return {
+    v: 1,
+    ...(cleanOptionalText(src.name, 32) ? { name: cleanOptionalText(src.name, 32) } : {}),
+    ...(cleanOptionalText(src.role, 32) ? { role: cleanOptionalText(src.role, 32) } : {}),
+    ...(look ? { look } : {}),
+    ...(typeof seed === 'number' ? { seed } : {}),
+    ...(parts ? { parts } : {}),
+    ...(cleanOptionalText(src.companionPokemon, 40) ? { companionPokemon: cleanOptionalText(src.companionPokemon, 40) } : {}),
+    ...(cleanOptionalText(src.companionPetId, 48) ? { companionPetId: cleanOptionalText(src.companionPetId, 48) } : {}),
+    ...(cleanOptionalText(src.companionPetName, 24) ? { companionPetName: cleanOptionalText(src.companionPetName, 24) } : {}),
+  };
+}

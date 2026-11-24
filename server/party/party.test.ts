@@ -10,7 +10,9 @@ import { effectiveHour } from '../../client/src/world/render/daylight';
 import { groupRooms } from '../../client/src/ui/model';
 import type { SpotDef } from '../../client/src/world/layout/types';
 import { chooseSeat, lacksBackView } from '../../client/src/world/sim/behavior';
-import { DUEL_DURATION_MS, isPokemonPet } from '../../client/src/world/sim/arena';
+import { decodeAppearanceCode, encodeAppearanceCode } from '../../shared/appearance';
+import { DUEL_COOLDOWN_MS, DUEL_DURATION_MS, isPokemonPet } from '../../client/src/world/sim/arena';
+import { renderCustomizeHtml } from './customize-page';
 import { slotAt } from '../../client/src/world/layout/geometry';
 import { canEditCharacter } from '../../client/src/ui/character-model';
 import { pmdAnimForPose, resolveCodexFrame } from '../../client/src/world/render/pet-sprites';
@@ -121,7 +123,7 @@ describe('Codex V2 PetRegistry & Pokémon lookup', () => {
       expect(list.map((p) => p.id).sort()).toEqual(['dafeiyu', 'psyduck-3d', 'snorlax']);
       const byId = new Map(list.map((p) => [p.id, p]));
       expect(byId.get('dafeiyu')?.source).toBe('builtin');
-      expect(byId.get('dafeiyu')?.hasBackView).toBe(true);
+      expect(byId.get('dafeiyu')?.hasBackView).toBe(false);
       expect(byId.get('psyduck-3d')?.source).toBe('builtin');
       expect(byId.get('psyduck-3d')?.hasBackView).toBe(false);
       expect(byId.get('snorlax')?.source).toBe('builtin');
@@ -962,5 +964,72 @@ describe('Pokémon Duel Arena layout, lifecycle & leaderboard persistence', () =
     }
     expect(soloSim.arena.state.phase).toBe('idle');
     expect(soloSim.arena.toSyncedState().nextDuelAt).toBeUndefined();
+  });
+
+  it('enforces hasBackView strictly for non-Pokemon pets, supports 2m duel cooldown & admin canDuel override, and decodes AP1 appearance codes', () => {
+    expect(DUEL_COOLDOWN_MS).toBe(120_000);
+
+    const dir = makeTempDir();
+    const pets = new PetRegistry(dir, null, null, join(process.cwd(), 'assets', 'default-pets'));
+    const store = new PartyStore({ dataDir: dir, pets });
+
+    // dafeiyu & psyduck-3d have hasBackView=false even with 11/9 rows; snorlax has hasBackView=true
+    const dafeiyu = pets.getPet('dafeiyu');
+    const psyduck = pets.getPet('psyduck-3d');
+    const snorlax = pets.getPet('snorlax');
+    expect(dafeiyu?.hasBackView).toBe(false);
+    expect(psyduck?.hasBackView).toBe(false);
+    expect(snorlax?.hasBackView).toBe(true);
+    expect(lacksBackView(dafeiyu)).toBe(true);
+    expect(lacksBackView(psyduck)).toBe(true);
+    expect(lacksBackView(snorlax)).toBe(false);
+
+    const t0 = Date.UTC(2026, 5, 1, 12, 0, 0);
+    // Customizer AP1 code for human member
+    const code = encodeAppearanceCode({
+      name: '科比',
+      role: '全栈工程师',
+      look: 'm',
+      seed: 123456,
+      parts: { hairStyle: 'spiky', topStyle: 'hoodie', top: '#e2604f', accessory: 'glasses' },
+      companionPokemon: '皮卡丘',
+    });
+    const decoded = decodeAppearanceCode(code);
+    expect(decoded?.name).toBe('科比');
+    expect(decoded?.parts?.top).toBe('#e2604f');
+    expect(decoded?.companionPokemon).toBe('皮卡丘');
+
+    const repRes = store.report({ id: 'kobe', appearanceCode: code, status: 'idle', agentTool: 'Codex' }, t0);
+    expect(repRes.ok).toBe(true);
+
+    store.report({ id: 'fish', name: '大肥鱼', status: 'idle', petId: 'dafeiyu' }, t0);
+    store.report({ id: 'sno', name: '卡比兽', status: 'idle', petId: 'snorlax' }, t0);
+
+    // Default canDuel: human=false, dafeiyu=false, snorlax=true
+    const snap1 = store.toSnapshot(t0);
+    expect(snap1.agents.find((a) => a.id === 'kobe')?.canDuel).toBe(false);
+    expect(snap1.agents.find((a) => a.id === 'kobe')?.parts?.top).toBe('#e2604f');
+    expect(snap1.agents.find((a) => a.id === 'fish')?.canDuel).toBe(false);
+    expect(snap1.agents.find((a) => a.id === 'sno')?.canDuel).toBe(true);
+
+    // Non-back-view pet (dafeiyu) must never be allowed on ANY dir='up' seat/spot
+    const sim = new Sim(stubArt, () => DEFAULT_WORLD_OPTIONS, null);
+    sim.applySnapshot(snap1, t0);
+    const fishChar = sim.chars.get('fish')!;
+    const upSpot: SpotDef = { id: 'sofa-up', kind: 'sofa', areaId: 'core:lounge', tx: 5, ty: 8, x: 80, y: 128, dir: 'up', seated: true };
+    const downSpot: SpotDef = { id: 'sofa-down', kind: 'sofa', areaId: 'core:lounge', tx: 5, ty: 6, x: 80, y: 96, dir: 'down', seated: true };
+    expect(sim.canUseSeat(fishChar, upSpot)).toBe(false);
+    expect(sim.canUseSeat(fishChar, downSpot)).toBe(true);
+
+    // Admin enables Easter egg canDuel=true for human 'kobe' -> now kobe vs sno can duel!
+    expect(store.setMemberCanDuel('kobe', true)).toEqual({ ok: true, canDuel: true });
+    sim.applySnapshot(store.toSnapshot(t0 + 100), t0 + 100);
+    const trig = sim.arena.triggerNow(t0 + 200);
+    expect(trig.ok).toBe(true);
+    expect([sim.arena.state.leftId, sim.arena.state.rightId].sort()).toEqual(['kobe', 'sno']);
+
+    // Customizer HTML and report.mjs support --appearance
+    expect(renderCustomizeHtml('https://agent.ipil.space')).toContain('像素小人捏脸工坊');
+    expect(renderReportScript('https://agent.ipil.space')).toContain('--appearance');
   });
 });

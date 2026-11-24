@@ -237,17 +237,27 @@ export class PetRegistry {
         id;
       const description = typeof parsed.description === 'string' ? parsed.description.trim() : undefined;
       const spec = normalizeCodexSpec(parsed);
-      let hasBackView = false;
+      const row9 = spec.states?.['look_directions_1_8']?.row ?? 9;
+      const row10 = spec.states?.['look_directions_9_16']?.row ?? 10;
       if (dims) {
         const actualRows = Math.floor(dims.height / spec.frameHeight);
-        const actualCols = Math.floor(dims.width / spec.frameWidth);
         if (actualRows > 0) spec.gridRows = Math.min(spec.gridRows, actualRows);
-        const row9 = spec.states?.['look_directions_1_8']?.row ?? 9;
-        const row10 = spec.states?.['look_directions_9_16']?.row ?? 10;
-        hasBackView = actualRows > Math.max(row9, row10) && actualCols >= 8;
-      } else {
-        const hasGazeState = !!(spec.states?.['look_directions_1_8'] && spec.states?.['look_directions_9_16']);
-        hasBackView = spec.gridRows >= 11 && hasGazeState;
+      }
+      const isPmdSheet =
+        (typeof parsed.author === 'string' && /pmdcollab|spritecollab/i.test(parsed.author)) ||
+        (typeof parsed.description === 'string' && /pmdcollab|spritecollab/i.test(parsed.description));
+      let hasBackView = false;
+      if (typeof parsed.hasBackView === 'boolean') {
+        hasBackView = parsed.hasBackView;
+      } else if (isPmdSheet) {
+        if (dims) {
+          const actualRows = Math.floor(dims.height / spec.frameHeight);
+          const actualCols = Math.floor(dims.width / spec.frameWidth);
+          hasBackView = actualRows > Math.max(row9, row10) && actualCols >= 8;
+        } else {
+          const hasGazeState = !!(spec.states?.['look_directions_1_8'] && spec.states?.['look_directions_9_16']);
+          hasBackView = spec.gridRows >= 11 && hasGazeState;
+        }
       }
 
       target.set(id, {

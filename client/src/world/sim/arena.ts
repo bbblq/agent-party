@@ -1,5 +1,5 @@
 import { beijingHourBucket } from '../../../../shared/beijing';
-import type { AgentPetInfo, ArenaFxKind, ArenaLeaderboardEntry, SyncedArenaEvent, SyncedArenaFx, SyncedArenaState } from '../../../../shared/types';
+import type { AgentInfo, AgentPetInfo, ArenaFxKind, ArenaLeaderboardEntry, SyncedArenaEvent, SyncedArenaFx, SyncedArenaState } from '../../../../shared/types';
 import { ARENA_ID } from '../layout/core';
 import type { SpotDef } from '../layout/types';
 import type { Character } from './character';
@@ -7,13 +7,14 @@ import type { Sim } from './sim';
 import type { Step } from './steps';
 
 export const DUEL_DURATION_MS = 60_000;
+export const DUEL_COOLDOWN_MS = 120_000;
 const GATHER_TIMEOUT_MS = 18_000;
 const FINISH_HOLD_MS = 6_000;
 const FX_DURATION_MS = 950;
 const FIRST_DUEL_DELAY_MIN_MS = 12_000;
 const FIRST_DUEL_DELAY_MAX_MS = 18_000;
-const COOLDOWN_MIN_MS = 45_000;
-const COOLDOWN_MAX_MS = 85_000;
+const COOLDOWN_MIN_MS = DUEL_COOLDOWN_MS;
+const COOLDOWN_MAX_MS = DUEL_COOLDOWN_MS;
 
 const POKEMON_PET_IDS = new Set([
   'pikachu',
@@ -101,7 +102,7 @@ const POKEMON_PET_IDS = new Set([
   'armarouge',
 ]);
 
-/** 判断角色是否为宝可梦宠物（只有宝可梦可参与决斗，像素小人和大肥鱼等非宝可梦桌宠不参赛，只可围观）。 */
+/** 判断角色是否为宝可梦宠物（只有宝可梦默认可参与决斗，像素小人和大肥鱼等非宝可梦桌宠默认仅围观）。 */
 export function isPokemonPet(pet: AgentPetInfo | undefined): boolean {
   if (!pet) return false;
   const id = pet.id.trim().toLowerCase();
@@ -110,6 +111,12 @@ export function isPokemonPet(pet: AgentPetInfo | undefined): boolean {
   if (POKEMON_PET_IDS.has(id)) return true;
   const stripped = id.replace(/(?:-(?:2d|3d|v\d+))+$/g, '');
   return POKEMON_PET_IDS.has(stripped);
+}
+
+/** 最终决斗资格判定：优先采用后台手动开关 `canDuel`，未显式配置时宝可梦默认开启、其余角色默认关闭。 */
+export function canCharacterDuel(info: Pick<AgentInfo, 'canDuel' | 'pet'>): boolean {
+  if (typeof info.canDuel === 'boolean') return info.canDuel;
+  return isPokemonPet(info.pet);
 }
 
 interface MoveDef {
@@ -515,7 +522,7 @@ export class ArenaController {
     const workFighters: Character[] = [];
     for (const c of this.sim.chars.values()) {
       if (c.gone || c.leaving || c.arriving) continue;
-      if (!isPokemonPet(c.info.pet)) continue;
+      if (!canCharacterDuel(c.info)) continue;
       if (c.mode === 'idle' && !c.inside) {
         idleFighters.push(c);
       } else if (c.mode === 'work' || c.mode === 'idle' || c.mode === 'shell') {

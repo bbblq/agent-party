@@ -5,6 +5,7 @@
   "name": "卡比兽 (Snorlax)",
   "displayName": "卡比兽 (Snorlax)",
   "description": "Official-quality animated AI companion pet based on Snorlax from Pokémon Mystery Dungeon (SpriteCollab).",
+  "hasBackView": true,
   "spritesheetPath": "spritesheet.webp",
   "author": "Antigravity & PMDCollab Community",
   "license": "CC-BY-NC 4.0 / Fan Work",

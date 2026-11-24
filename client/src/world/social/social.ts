@@ -245,7 +245,7 @@ export class Social {
     const assignedSpots: Array<SpotDef | null> = everyone.map((_, i) => plan.seats[i] ?? null);
     for (let i = 0; i < everyone.length; i++) {
       const s = assignedSpots[i];
-      if (!s || !lacksBackView(everyone[i].info.pet) || !s.seated || s.dir !== 'up') continue;
+      if (!s || !lacksBackView(everyone[i].info.pet) || s.dir !== 'up') continue;
       const swapStart = info.match && i < nPlayers ? 0 : info.match ? nPlayers : 0;
       const swapEnd = info.match && i < nPlayers ? nPlayers : everyone.length;
       const j = assignedSpots.findIndex(
@@ -254,7 +254,7 @@ export class Social {
           idx < swapEnd &&
           idx !== i &&
           cand !== null &&
-          (!cand.seated || cand.dir !== 'up') &&
+          cand.dir !== 'up' &&
           !lacksBackView(everyone[idx].info.pet),
       );
       if (j !== -1) {
@@ -262,7 +262,8 @@ export class Social {
         assignedSpots[j] = s;
         assignedSpots[i] = tmp;
       } else {
-        assignedSpots[i] = null;
+        const alt = plan.pool.find((cand) => cand.dir !== 'up' && !assignedSpots.includes(cand));
+        assignedSpots[i] = alt ?? null;
       }
     }
     everyone.forEach((c, i) => {
@@ -432,6 +433,7 @@ export class Social {
     let bestD = Infinity;
     // de preferência na fileira de trás (rosto para a câmera, olhando a partida); depois dos lados
     const rowCost = (dy: number) => (dy === -1 ? 0 : dy === -2 ? 1.2 : dy === 1 ? 2.5 : dy === 0 ? 2 : 4);
+    const noBack = lacksBackView(ch.info.pet);
     for (let dy = -2; dy <= 2; dy++) {
       for (let dx = -2; dx <= 3; dx++) {
         const x = Math.round(cx) + dx;
@@ -439,6 +441,7 @@ export class Social {
         const k = y * grid.w + x;
         if (grid.get(x, y) !== FREE || busy.has(k) || taken.has(k)) continue;
         if (spots.some((s) => s.tx === x && s.ty === y)) continue;
+        if (noBack && facing(x * TILE, y * TILE, cx * TILE, cy * TILE) === 'up') continue;
         // bem atrás de um jogador, some atrás dele
         const hidden = spots.some((s) => s.tx === x && s.ty === y + 1);
         const d = Math.abs(x + 0.5 - cx) + rowCost(dy) + (hidden ? 3 : 0);

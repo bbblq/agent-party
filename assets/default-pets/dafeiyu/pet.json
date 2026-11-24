@@ -4,6 +4,7 @@
   "name": "蓝色大肥鱼",
   "displayName": "蓝色大肥鱼",
   "description": "蓝发蓝眼的Q版小鲸鱼女仆，穿着深蓝白色女仆裙，带着蓬松长发和可爱的鲸鱼尾巴。",
+  "hasBackView": false,
   "sourceRepo": "https://github.com/yifanlu0227/DaFeiYu-codex-pet",
   "spritesheetPath": "spritesheet.png",
   "spriteVersionNumber": 2,

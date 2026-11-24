@@ -381,7 +381,13 @@ export function renderAdminHtml(): string {
           </div>
 
           <div id="npc-err" class="err" hidden></div>
-          <button class="btn btn-primary" type="submit">➕ 生成 NPC 并加入办公室</button>
+          <label style="display:inline-flex;align-items:center;gap:8px;margin:4px 0 12px;cursor:pointer;color:var(--text)">
+            <input id="npc-can-duel" type="checkbox" style="width:auto" checked />
+            <span>⚔️ 允许参加宝可梦决斗（宝可梦默认开启，人类或其他桌宠开启后可作为彩蛋上场对战）</span>
+          </label>
+          <div>
+            <button class="btn btn-primary" type="submit">➕ 生成 NPC 并加入办公室</button>
+          </div>
         </form>
       </div>
 
@@ -394,6 +400,7 @@ export function renderAdminHtml(): string {
               <th>形象</th>
               <th>行为模式</th>
               <th>当前状态</th>
+              <th>决斗资格</th>
               <th>操作</th>
             </tr>
           </thead>
@@ -410,6 +417,7 @@ export function renderAdminHtml(): string {
               <th>接入工具</th>
               <th>形象</th>
               <th>状态</th>
+              <th>决斗资格</th>
               <th>最近活跃</th>
               <th>操作</th>
             </tr>
@@ -526,6 +534,9 @@ export function renderAdminHtml(): string {
         btn.append(img, label);
         btn.addEventListener('click', () => {
           selectedPetId = p.id;
+          if (npcMode === 'pet') {
+            $('npc-can-duel').checked = p.id !== 'dafeiyu';
+          }
           renderPetGrid(cachedPets);
         });
         grid.append(btn);
@@ -564,11 +575,15 @@ export function renderAdminHtml(): string {
         ? npcs.map((n) => {
             const lookLabel = n.avatarMode === 'pet' ? ('🐾 ' + esc(n.petId)) : '🧑 像素小人';
             const modeLabel = n.npcAuto ? '自动劳逸结合' : '固定状态';
+            const duelBtn = n.canDuel
+              ? '<button class="btn btn-sm" style="border-color:rgba(250,204,21,0.55);color:#fde047" data-duel-toggle="' + esc(n.id) + '" data-duel-next="false">⚔️ 参战中</button>'
+              : '<button class="btn btn-sm" style="opacity:0.78" data-duel-toggle="' + esc(n.id) + '" data-duel-next="true">🍿 仅围观 (点此开启)</button>';
             return '<tr>' +
               '<td><strong>' + esc(n.name) + '</strong><div class="muted">' + esc(n.role) + '</div></td>' +
               '<td>' + lookLabel + '</td>' +
               '<td>' + modeLabel + '</td>' +
               '<td>' + statusPill(n.lastStatus) + '</td>' +
+              '<td>' + duelBtn + '</td>' +
               '<td><div class="actions">' +
                 '<button class="btn btn-sm" data-npc-toggle="' + esc(n.id) + '" data-next="' + (n.lastStatus === 'working' ? 'idle' : 'working') + '">' + (n.lastStatus === 'working' ? '去摸鱼' : '去办公') + '</button>' +
                 (n.avatarMode === 'human' ? '<button class="btn btn-sm" data-npc-reroll="' + esc(n.id) + '">换个造型</button>' : '') +
@@ -576,7 +591,7 @@ export function renderAdminHtml(): string {
               '</div></td>' +
             '</tr>';
           }).join('')
-        : '<tr><td colspan="5" class="muted">暂无常驻 NPC</td></tr>';
+        : '<tr><td colspan="6" class="muted">暂无常驻 NPC</td></tr>';
 
       // Real members
       const members = data.members || [];
@@ -586,11 +601,15 @@ export function renderAdminHtml(): string {
         ? members.map((m) => {
             const lookLabel = m.avatarMode === 'pet' ? ('🐾 ' + esc(m.petId)) : '🧑 像素小人';
             const ownerSub = m.ownerId ? (' · 伴随宠物 (所属 ' + esc(m.ownerId) + ')') : '';
+            const duelBtn = m.canDuel
+              ? '<button class="btn btn-sm" style="border-color:rgba(250,204,21,0.55);color:#fde047" data-duel-toggle="' + esc(m.id) + '" data-duel-next="false">⚔️ 参战中</button>'
+              : '<button class="btn btn-sm" style="opacity:0.78" data-duel-toggle="' + esc(m.id) + '" data-duel-next="true">🍿 仅围观 (点此开启)</button>';
             return '<tr>' +
               '<td><strong>' + esc(m.name) + '</strong><div class="muted">ID: ' + esc(m.id) + ' · ' + esc(m.role) + ownerSub + '</div></td>' +
               '<td>' + (m.agentTool ? '<span class="pill tool">' + esc(m.agentTool) + '</span>' : '<span class="muted">-</span>') + '</td>' +
               '<td>' + lookLabel + '</td>' +
               '<td>' + statusPill(m.lastStatus) + '</td>' +
+              '<td>' + duelBtn + '</td>' +
               '<td class="muted">' + fmtTime(m.lastSeenAt) + '</td>' +
               '<td><div class="actions">' +
                 '<button class="btn btn-sm btn-warn" data-kick="' + esc(m.id) + '">移出</button>' +
@@ -598,7 +617,7 @@ export function renderAdminHtml(): string {
               '</div></td>' +
             '</tr>';
           }).join('')
-        : '<tr><td colspan="6" class="muted">暂无成员接入</td></tr>';
+        : '<tr><td colspan="7" class="muted">暂无成员接入</td></tr>';
 
       // Bans
       const bans = data.banned || [];
@@ -668,6 +687,13 @@ export function renderAdminHtml(): string {
         document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b === btn));
         $('npc-pokemon-picker').hidden = npcMode !== 'pokemon';
         $('npc-pet-picker').hidden = npcMode !== 'pet';
+        if (npcMode === 'pokemon') {
+          $('npc-can-duel').checked = true;
+        } else if (npcMode === 'human') {
+          $('npc-can-duel').checked = false;
+        } else {
+          $('npc-can-duel').checked = selectedPetId !== 'dafeiyu';
+        }
       });
     });
 
@@ -853,6 +879,7 @@ export function renderAdminHtml(): string {
         agentTool: $('npc-tool').value.trim() || 'NPC',
         avatarMode: isPetMode ? 'pet' : 'human',
         ...(isPetMode ? { petId: chosenPetId } : {}),
+        canDuel: $('npc-can-duel').checked,
         status: beh === 'working' ? 'working' : 'idle',
         npcAuto: beh === 'auto',
       };
@@ -874,7 +901,14 @@ export function renderAdminHtml(): string {
       const btn = ev.target.closest('button');
       if (!btn) return;
       try {
-        if (btn.dataset.kick) {
+        if (btn.dataset.duelToggle) {
+          await api('/api/admin/members/' + encodeURIComponent(btn.dataset.duelToggle) + '/duel', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ canDuel: btn.dataset.duelNext === 'true' }),
+          });
+          await loadState();
+        } else if (btn.dataset.kick) {
           await api('/api/admin/members/' + encodeURIComponent(btn.dataset.kick) + '/kick', { method: 'POST' });
           await loadState();
         } else if (btn.dataset.ban) {
