@@ -100,8 +100,8 @@ export function layoutExterior(cols: number): ExteriorLayout {
     floors,
     props,
     lanes: [
-      { y: streetY + Math.round(streetH * 0.36), dir: 1 },
-      { y: streetY + Math.round(streetH * 0.86), dir: -1 },
+      { y: streetY + Math.round(streetH * 0.36), dir: -1 },
+      { y: streetY + Math.round(streetH * 0.86), dir: 1 },
     ],
     streetY,
     streetH,

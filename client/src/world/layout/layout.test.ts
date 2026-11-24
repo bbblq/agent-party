@@ -151,6 +151,10 @@ describe('layout do prédio', () => {
     const ext = layoutExterior(cols);
     expect(ext.bounds.x).toBeLessThan(0);
     expect(ext.bounds.x + ext.bounds.w).toBeGreaterThan(cols * COL_W);
+    expect(ext.lanes).toHaveLength(2);
+    expect(ext.lanes[0].y).toBeLessThan(ext.lanes[1].y);
+    expect(ext.lanes[0].dir).toBe(-1);
+    expect(ext.lanes[1].dir).toBe(1);
     const shell = slotShell(5, true);
     expect(shell.walls.length).toBeGreaterThan(0);
     expect(shell.props.every((p) => p.slot === 5)).toBe(true);

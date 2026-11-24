@@ -14,6 +14,7 @@ import { decodeAppearanceCode, encodeAppearanceCode } from '../../shared/appeara
 import { DUEL_COOLDOWN_MS, DUEL_DURATION_MS, isPokemonPet } from '../../client/src/world/sim/arena';
 import { renderAdminHtml } from './admin-page';
 import { renderCustomizeHtml } from './customize-page';
+import { OfficeFeedTracker } from './feed';
 import { slotAt } from '../../client/src/world/layout/geometry';
 import { canEditCharacter } from '../../client/src/ui/character-model';
 import { pmdAnimForPose, resolveCodexFrame } from '../../client/src/world/render/pet-sprites';
@@ -21,7 +22,7 @@ import { Sim } from '../../client/src/world/sim/sim';
 import { parseBoundary, parseMultipart } from './multipart';
 import { normalizeCodexSpec, PetRegistry, readSpriteDimensions, sanitizePetId } from './pets';
 import { findPokemon, parseAnimDataXml, searchPokemon } from './pokemon';
-import { DEFAULT_OFFICE_SETTINGS, DEFAULT_RECEPTION_SIGN, formatCompanionName, normalizePublicUrl, PartyStore } from './store';
+import { DEFAULT_OFFICE_SETTINGS, DEFAULT_RECEPTION_SIGN, defaultCanDuel, formatCompanionName, normalizePublicUrl, PartyStore } from './store';
 import { renderReportScript, renderWatchScript } from './client-scripts';
 import { renderSetupMarkdown } from './setup-page';
 import { WorldSync } from './world-sync';
@@ -1170,7 +1171,7 @@ describe('Pokémon Duel Arena layout, lifecycle & leaderboard persistence', () =
     expect(() => new Function(adminScript![1])).not.toThrow();
   });
 
-  it('keeps dueling Pokemon on the arena ring across fastForward and triggers pre-duel server sync 5s before duel', () => {
+  it('keeps stable countdown across late join/snapshots, avoids gather twitching, and snaps fighters across fastForward', () => {
     const dir = makeTempDir();
     const pets = new PetRegistry(dir, null, null, join(process.cwd(), 'assets', 'default-pets'));
     const store = new PartyStore({ dataDir: dir, pets });
@@ -1180,35 +1181,48 @@ describe('Pokémon Duel Arena layout, lifecycle & leaderboard persistence', () =
     store.report({ id: 'npc:psy', name: '可达鸭', status: 'working', petId: 'psyduck-3d' }, t0);
 
     const world = new WorldSync(store.toSnapshot(t0));
-    const preSyncFrames: number[] = [];
-    world.onPreDuelSync((f) => preSyncFrames.push(f.t));
-
-    // Step server clock up to 5s before nextDuelAt
     const firstNext = world.sim.arena.toSyncedState().nextDuelAt!;
     expect(firstNext).toBeGreaterThan(t0);
-    world.step(firstNext - 6_000);
-    expect(preSyncFrames.length).toBe(0);
-    const frameAtPreSync = world.step(firstNext - 4_500);
-    expect(preSyncFrames.length).toBe(1);
 
-    // Client sim applies snapshot + pre-duel frame sync
+    // Late-joining client receives live server timestamp t, so remaining countdown is accurate (never reset to initial)
+    const laterNow = firstNext - 4_000;
+    const lateEv = world.getArenaEvent(laterNow);
+    expect(lateEv.t).toBe(laterNow);
+
     const clientSim = new Sim(stubArt, () => DEFAULT_WORLD_OPTIONS, null);
-    clientSim.applySnapshot(store.toSnapshot(t0), t0);
-    clientSim.update(0.1, t0 + 100);
-    clientSim.syncFromServerFrame(frameAtPreSync, firstNext - 4_500);
+    clientSim.applySnapshot(store.toSnapshot(laterNow), laterNow);
+    clientSim.update(0.1, laterNow + 100);
+    clientSim.arena.applyRemoteArenaEvent(lateEv, laterNow + 100);
+    expect(clientSim.arena.state.nextDuelAt! - (laterNow + 100)).toBe(4_000);
 
-    // Server triggers duel and sends gather -> fight arena events
+    // Subsequent snapshot + rebindRemoteParticipants never inflates nextDuelAt back to a stale timestamp
+    const snapLater = store.toSnapshot(laterNow + 2_100);
+    clientSim.applySnapshot(snapLater, laterNow + 2_100);
+    clientSim.arena.rebindRemoteParticipants(laterNow + 2_100);
+    expect(clientSim.arena.state.nextDuelAt! - (laterNow + 2_100)).toBe(2_000);
+
+    // Server triggers duel -> gather phase: seated fighter's exit + go plan MUST NOT be reset on subsequent 60fps ticks
     const res = world.triggerArenaDuel();
     expect(res.ok).toBe(true);
-    clientSim.arena.applyRemoteArenaEvent(world.getArenaEvent(), firstNext);
-    clientSim.update(0.1, firstNext + 50);
-
-    const ringSpots = [...clientSim.spots.ofKind('arena_fight')].sort((a, b) => a.tx - b.tx);
+    const gatherAt = Date.now();
+    clientSim.arena.applyRemoteArenaEvent(world.getArenaEvent(gatherAt), gatherAt);
     const sno = clientSim.chars.get('npc:sno')!;
     const psy = clientSim.chars.get('npc:psy')!;
+    const snoFirstStep = sno.step;
+    const snoQueueLen = sno.queue.length;
+    expect(snoQueueLen).toBeGreaterThan(0);
+
+    // Run several 60fps ticks; ensureGather must not clear/re-dispatch while character is already exiting/walking to ring
+    clientSim.update(0.016, gatherAt + 16);
+    expect(sno.queue.length).toBeLessThanOrEqual(snoQueueLen);
+    if (snoFirstStep) {
+      expect(sno.step === snoFirstStep || sno.queue.length < snoQueueLen).toBe(true);
+    }
+
+    const ringSpots = [...clientSim.spots.ofKind('arena_fight')].sort((a, b) => a.tx - b.tx);
 
     // Even if client browser tab was hidden and fastForward runs mid-duel, fighters MUST stay on arena ring (never desk)
-    clientSim.fastForward(firstNext + 5_000);
+    clientSim.fastForward(gatherAt + 5_000);
     const leftId = clientSim.arena.state.leftId!;
     const rightId = clientSim.arena.state.rightId!;
     const leftChar = clientSim.chars.get(leftId)!;
@@ -1219,7 +1233,7 @@ describe('Pokémon Duel Arena layout, lifecycle & leaderboard persistence', () =
     expect(rightChar.seated).toBe(false);
 
     // Also advance server into fight phase and push to client where fighter was artificially seated at desk: update() snaps them to ring
-    let now = Date.now() + 25_000;
+    let now = gatherAt + 1_000;
     for (let i = 0; i < 40 && world.sim.arena.state.phase === 'gather'; i++) {
       now += 500;
       world.step(now);
@@ -1231,11 +1245,241 @@ describe('Pokémon Duel Arena layout, lifecycle & leaderboard persistence', () =
     psy.seated = true;
     psy.x = 20;
     psy.y = 20;
-    clientSim.arena.applyRemoteArenaEvent(world.getArenaEvent(), now);
+    clientSim.arena.applyRemoteArenaEvent(world.getArenaEvent(now), now);
     clientSim.update(0.1, now + 50);
     expect(Math.hypot(leftChar.x - ringSpots[0].x, leftChar.y - ringSpots[0].y)).toBeLessThanOrEqual(2);
     expect(Math.hypot(rightChar.x - ringSpots[1].x, rightChar.y - ringSpots[1].y)).toBeLessThanOrEqual(2);
     expect(leftChar.dir).toBe('right');
     expect(rightChar.dir).toBe('left');
+  });
+
+  it('promotes hourly champion to prevChampion on hour rollover and persists across PartyStore reload', () => {
+    const dir = makeTempDir();
+    const pets = new PetRegistry(dir, null, null, join(process.cwd(), 'assets', 'default-pets'));
+    const store = new PartyStore({ dataDir: dir, pets });
+
+    const hourH = Date.UTC(2026, 5, 1, 10, 15, 0);
+    const hourHBucket = beijingHourBucket(hourH);
+    const hourNext = hourH + 3_600_000;
+
+    store.report({ id: 'p1', name: '皮卡丘', status: 'idle', petId: 'snorlax' }, hourH);
+    store.report({ id: 'p2', name: '可达鸭', status: 'idle', petId: 'psyduck-3d' }, hourH);
+
+    // Ensure store's bucket aligns to hourH before recording results
+    store.ensureArenaLeaderboardFresh(hourH);
+    store.recordArenaResult('p1', '皮卡丘', 'p2', '可达鸭', hourH + 1000);
+    store.recordArenaResult('p1', '皮卡丘', 'p2', '可达鸭', hourH + 2000);
+    expect(store.getPrevArenaChampion(hourH + 3000)).toBeNull();
+    expect(store.getArenaLeaderboard(hourH + 3000)[0]).toMatchObject({ id: 'p1', name: '皮卡丘', wins: 2, losses: 0 });
+
+    // Rollover to next hour promotes #1 to prevChampion and clears current leaderboard
+    const prev = store.getPrevArenaChampion(hourNext);
+    expect(prev).toEqual({ id: 'p1', name: '皮卡丘', wins: 2, losses: 0, hourBucket: hourHBucket });
+    expect(store.getArenaLeaderboard(hourNext)).toEqual([]);
+
+    // Flush and reload in a new PartyStore instance: prevChampion persists
+    store.flush();
+    const reloaded = new PartyStore({ dataDir: dir, pets });
+    expect(reloaded.getPrevArenaChampion(hourNext)).toEqual({
+      id: 'p1',
+      name: '皮卡丘',
+      wins: 2,
+      losses: 0,
+      hourBucket: hourHBucket,
+    });
+
+    // Also verify WorldSync emits arena event with prevChampion on hourly rollover
+    const ws = new WorldSync(reloaded.toSnapshot(hourH), {
+      initialLeaderboard: [
+        { id: 'p2', name: '可达鸭', wins: 3, losses: 1 },
+        { id: 'p1', name: '皮卡丘', wins: 1, losses: 3 },
+      ],
+      initialPrevChampion: prev,
+    });
+    const arenaEvents: Array<ReturnType<WorldSync['getArenaEvent']>> = [];
+    ws.onArena((ev) => arenaEvents.push(ev));
+    ws.step(hourH + 5_000);
+    ws.step(hourNext + 5_000);
+    const lastEv = arenaEvents.at(-1);
+    expect(lastEv?.arena.leaderboard).toEqual([]);
+    expect(lastEv?.arena.prevChampion).toMatchObject({ id: 'p2', name: '可达鸭', wins: 3, losses: 1 });
+  });
+
+  it('supports self-service duel toggles, full 1025 Pokemon search in /customize, and redesigned Codex V2 upload UI in /admin', () => {
+    const dir = makeTempDir();
+    const pets = new PetRegistry(dir, null, null, join(process.cwd(), 'assets', 'default-pets'));
+    const fakePng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 1]);
+    pets.saveUploadedPet({ petId: 'my-custom-cat', displayName: '我的小猫', spriteBuffer: fakePng });
+
+    // Default duel rules: human=false, uploaded/local pet=false, dafeiyu=false, builtin snorlax=true, system pmd=true
+    expect(defaultCanDuel('human')).toBe(false);
+    expect(defaultCanDuel('pet', 'my-custom-cat', pets.getPet('my-custom-cat'), pets.getPetSource('my-custom-cat'))).toBe(false);
+    expect(defaultCanDuel('pet', 'dafeiyu', pets.getPet('dafeiyu'), pets.getPetSource('dafeiyu'))).toBe(false);
+    expect(defaultCanDuel('pet', 'snorlax', pets.getPet('snorlax'), pets.getPetSource('snorlax'))).toBe(true);
+    expect(defaultCanDuel('pet', 'pmd:0025', { id: 'pmd:0025', kind: 'pmd', spriteUrl: '' }, 'pmd')).toBe(true);
+
+    const store = new PartyStore({ dataDir: dir, pets });
+    const t0 = Date.UTC(2026, 5, 1, 14, 0, 0);
+    const rep = store.report({ id: 'bob', name: 'Bob', status: 'idle', companionPetId: 'my-custom-cat', companionPetName: '小猫' }, t0);
+    expect(rep.ok).toBe(true);
+    if (!rep.ok) return;
+    const token = rep.member.editToken!;
+
+    // Default profile: human canDuel=false, uploaded companion companionCanDuel=false
+    const prof1 = store.getMemberByEditToken(token);
+    expect(prof1.ok).toBe(true);
+    if (!prof1.ok) return;
+    expect(prof1.canDuel).toBe(false);
+    expect(prof1.companionCanDuel).toBe(false);
+    expect(prof1.companionPetSource).toBe('uploaded');
+
+    // User toggles self canDuel=true and companionCanDuel=true via /customize
+    const upd1 = store.updateMemberByEditToken(token, { canDuel: true, companionCanDuel: true }, t0 + 1000);
+    expect(upd1.ok).toBe(true);
+    if (!upd1.ok) return;
+    expect(upd1.canDuel).toBe(true);
+    expect(upd1.companionCanDuel).toBe(true);
+
+    // Switching companion to built-in Pokemon 'snorlax' without explicit companionCanDuel defaults to true
+    const upd2 = store.updateMemberByEditToken(token, { canDuel: false, companionPetId: 'snorlax', companionPetName: '卡比兽' }, t0 + 2000);
+    expect(upd2.ok).toBe(true);
+    if (!upd2.ok) return;
+    expect(upd2.canDuel).toBe(false);
+    expect(upd2.companionCanDuel).toBe(true);
+
+    // Validate /customize HTML & inline script syntax
+    const customHtml = renderCustomizeHtml('https://agent.ipil.space', token);
+    expect(customHtml).toContain('1025 只宝可梦');
+    expect(customHtml).toContain('opt-self-duel');
+    expect(customHtml).toContain('opt-pet-duel');
+    expect(customHtml).toContain('随机男生');
+    expect(customHtml).toContain('随机女生');
+    expect(customHtml).toContain('自然唇色');
+    expect(customHtml).toContain('红润唇色');
+    const customScript = /<script>([\s\S]*?)<\/script>/.exec(customHtml);
+    expect(customScript).toBeTruthy();
+    expect(() => new Function(customScript![1])).not.toThrow();
+
+    // Validate /admin HTML & inline script syntax
+    const adminHtml = renderAdminHtml();
+    expect(adminHtml).toContain('精灵图集图片');
+    expect(adminHtml).toContain('动作配置文件 (pet.json)');
+    expect(adminHtml).toContain('必填');
+    expect(adminHtml).toContain('可选');
+    expect(adminHtml).toContain('随机男生');
+    expect(adminHtml).toContain('随机女生');
+    const adminScript = /<script>([\s\S]*?)<\/script>/.exec(adminHtml);
+    expect(adminScript).toBeTruthy();
+    expect(() => new Function(adminScript![1])).not.toThrow();
+  });
+
+  it('tracks privacy-safe online/status/arena/champion broadcasts via OfficeFeedTracker without stale backfill', () => {
+    const dir = makeTempDir();
+    const pets = new PetRegistry(dir, null, null, join(process.cwd(), 'assets', 'default-pets'));
+    const store = new PartyStore({ dataDir: dir, pets });
+
+    const t0 = Date.UTC(2026, 5, 1, 15, 0, 0);
+    store.report({ id: 'pre', name: '早到员工', status: 'working' }, t0);
+    const initialSnap = store.toSnapshot(t0);
+    const world = new WorldSync(initialSnap);
+    const tracker = new OfficeFeedTracker(initialSnap, world.getArenaEvent(t0));
+
+    // Repeating initial snapshot/arena produces no stale backfill
+    expect(tracker.diffSnapshot(initialSnap, t0 + 100)).toEqual([]);
+    expect(tracker.diffArena(world.getArenaEvent(t0 + 100))).toEqual([]);
+
+    // New member joins with companion pet: only primary member emits join broadcast (no companion duplicate, no sensitive fields)
+    store.report({ id: 'alice', name: 'Alice', status: 'working', companionPetId: 'snorlax', companionPetName: '卡比兽' }, t0 + 1000);
+    const joinItems = tracker.diffSnapshot(store.toSnapshot(t0 + 1000), t0 + 1000);
+    expect(joinItems).toHaveLength(1);
+    expect(joinItems[0]).toMatchObject({
+      agentId: 'alice',
+      agentName: 'Alice',
+      activity: { icon: '🟢', text: '进入办公室开始办公' },
+    });
+    expect(joinItems[0].activity.detail).toBeUndefined();
+
+    // Status transitions: working -> idle -> waiting -> working -> offline
+    store.report({ id: 'alice', status: 'idle' }, t0 + 2000);
+    const idleItems = tracker.diffSnapshot(store.toSnapshot(t0 + 2000), t0 + 2000);
+    expect(idleItems[0].activity).toMatchObject({ icon: '☕', text: '结束手头工作，去休息区摸鱼了' });
+
+    store.report({ id: 'alice', status: 'waiting' }, t0 + 3000);
+    const waitItems = tracker.diffSnapshot(store.toSnapshot(t0 + 3000), t0 + 3000);
+    expect(waitItems[0].activity).toMatchObject({ icon: '✋', text: '正在等待确认' });
+
+    store.report({ id: 'alice', status: 'working' }, t0 + 4000);
+    const workItems = tracker.diffSnapshot(store.toSnapshot(t0 + 4000), t0 + 4000);
+    expect(workItems[0].activity).toMatchObject({ icon: '💻', text: '回到工位开始办公' });
+
+    store.report({ id: 'alice', status: 'offline' }, t0 + 5000);
+    const offItems = tracker.diffSnapshot(store.toSnapshot(t0 + 5000), t0 + 5000);
+    expect(offItems).toHaveLength(1);
+    expect(offItems[0].activity).toMatchObject({ icon: '👋', text: '离开了办公室' });
+
+    // Arena duel start, finish, and prevChampion broadcasts (deduplicated across ticks)
+    const startEv = {
+      t: t0 + 6000,
+      arena: {
+        phase: 'gather' as const,
+        matchId: 7,
+        leftId: 'p1',
+        leftName: '皮卡丘',
+        leftHp: 100,
+        rightId: 'p2',
+        rightName: '可达鸭',
+        rightHp: 100,
+        startedAt: t0 + 6000,
+        endsAt: t0 + 24000,
+        durationMs: 60000,
+        watchers: [],
+        leaderboard: [],
+        prevChampion: null,
+      },
+    };
+    const startFeed = tracker.diffArena(startEv);
+    expect(startFeed).toHaveLength(1);
+    expect(startFeed[0]).toMatchObject({
+      agentId: 'p1',
+      agentName: '皮卡丘',
+      roomName: '宝可梦决斗场',
+      activity: { icon: '⚔️', text: '与 可达鸭 展开宝可梦决斗！' },
+    });
+    expect(tracker.diffArena({ ...startEv, arena: { ...startEv.arena, phase: 'fight' } })).toEqual([]);
+
+    const finishEv = {
+      t: t0 + 66000,
+      arena: {
+        ...startEv.arena,
+        phase: 'finish' as const,
+        winnerId: 'p1',
+        winnerName: '皮卡丘',
+        leaderboard: [{ id: 'p1', name: '皮卡丘', wins: 3, losses: 1 }],
+      },
+    };
+    const finishFeed = tracker.diffArena(finishEv);
+    expect(finishFeed).toHaveLength(1);
+    expect(finishFeed[0].activity).toMatchObject({
+      icon: '🏆',
+      text: '击败 可达鸭 赢得决斗胜利（本小时 3胜1负）！',
+    });
+    expect(tracker.diffArena(finishEv)).toEqual([]);
+
+    const champEv = {
+      t: t0 + 3_600_000,
+      arena: {
+        ...finishEv.arena,
+        phase: 'idle' as const,
+        leaderboard: [],
+        prevChampion: { id: 'p1', name: '皮卡丘', wins: 3, losses: 1, hourBucket: 999 },
+      },
+    };
+    const champFeed = tracker.diffArena(champEv);
+    expect(champFeed).toHaveLength(1);
+    expect(champFeed[0].activity).toMatchObject({
+      icon: '👑',
+      text: '荣膺上届决斗场冠军（3胜1负）！',
+    });
+    expect(tracker.diffArena(champEv)).toEqual([]);
   });
 });

@@ -15,7 +15,6 @@ import type { AgentInfo } from '../../../shared/types';
 import { rebaseSnapshot } from './playback';
 import { Overlay } from './render/overlay';
 import { Renderer } from './render/renderer';
-import { PRE_DUEL_SYNC_LEAD_MS } from './sim/arena';
 import { Sim, type VisitLight } from './sim/sim';
 import { NO_INTENT, VISITOR_ID, visitorInfo, type VisitorIntent } from './sim/visitor';
 import { SoundCues } from './sound-cues';
@@ -254,8 +253,8 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
       // No timelapse, os horários do snapshot vão para o relógio do mundo (world/playback.ts).
       if (playback) sim.applySnapshot(rebaseSnapshot(snap, worldNow - snap.serverTime), worldNow);
       else sim.applySnapshot(snap, Date.now());
-      if (!playback && !visitMode && store.lastArenaEvent) {
-        sim.arena.applyRemoteArenaEvent(store.lastArenaEvent, Date.now());
+      if (!playback && !visitMode) {
+        sim.arena.rebindRemoteParticipants(Date.now());
       }
     } catch (err) {
       console.error('[mundo] snapshot inválido ignorado', err);
@@ -263,17 +262,12 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
   };
   const offSnapshot = store.on('snapshot', onSnapshot);
   if (store.snapshot) onSnapshot();
-  const offWorld = store.on('world', (frame) => {
-    if (!playback && !visitMode) sim.syncFromServerFrame(frame, Date.now());
-  });
   const offArena = store.on('arena', (ev) => {
     if (!playback && !visitMode) sim.arena.applyRemoteArenaEvent(ev, Date.now());
   });
   if (store.lastArenaEvent && !playback && !visitMode) {
-    sim.arena.applyRemoteArenaEvent(store.lastArenaEvent, Date.now());
+    sim.arena.applyRemoteArenaEvent(store.lastArenaEvent, store.lastArenaReceivedAt || Date.now());
   }
-
-  let lastPreDuelSyncTarget = 0;
 
   void loadWorldAssets(abort.signal).then((a) => {
     if (!a) return;
@@ -300,17 +294,6 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
       const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
       if (canvas.clientWidth !== camera.viewW || canvas.clientHeight !== camera.viewH || dpr !== camera.dpr) resize();
       sim.update(dt, now);
-      if (
-        !playback &&
-        !visitMode &&
-        sim.arena.state.phase === 'idle' &&
-        sim.arena.state.nextDuelAt &&
-        now >= sim.arena.state.nextDuelAt - PRE_DUEL_SYNC_LEAD_MS &&
-        lastPreDuelSyncTarget !== sim.arena.state.nextDuelAt
-      ) {
-        lastPreDuelSyncTarget = sim.arena.state.nextDuelAt;
-        void store.forceSyncWithServer();
-      }
       // partidas e apostas resolvidas: para o feed (as do timelapse são encenação do passado: ficam fora)
       const events = sim.social.events;
       if (events.length) {
@@ -355,7 +338,10 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
       return;
     }
     lastTs = 0;
-    if (hiddenAt && Date.now() - hiddenAt > 5000) sim.fastForward(playback ? worldNow : Date.now());
+    if (hiddenAt && Date.now() - hiddenAt > 5000) {
+      sim.fastForward(playback ? worldNow : Date.now());
+      if (!playback && !visitMode) void store.syncArenaWithServer();
+    }
     hiddenAt = 0;
   };
 
@@ -494,7 +480,6 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
       cancelAnimationFrame(raf);
       abort.abort();
       offSnapshot();
-      offWorld();
       offArena();
       detachInput();
       window.removeEventListener('resize', resize);

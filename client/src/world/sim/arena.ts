@@ -1,5 +1,5 @@
 import { beijingHourBucket } from '../../../../shared/beijing';
-import type { AgentInfo, AgentPetInfo, ArenaFxKind, ArenaLeaderboardEntry, SyncedArenaEvent, SyncedArenaFx, SyncedArenaState } from '../../../../shared/types';
+import type { AgentInfo, AgentPetInfo, ArenaChampionRecord, ArenaFxKind, ArenaLeaderboardEntry, SyncedArenaEvent, SyncedArenaFx, SyncedArenaState } from '../../../../shared/types';
 import { ARENA_ID } from '../layout/core';
 import type { SpotDef } from '../layout/types';
 import type { Character } from './character';
@@ -8,7 +8,6 @@ import type { Step } from './steps';
 
 export const DUEL_DURATION_MS = 60_000;
 export const DUEL_COOLDOWN_MS = 180_000;
-export const PRE_DUEL_SYNC_LEAD_MS = 5_000;
 const GATHER_TIMEOUT_MS = 18_000;
 const FINISH_HOLD_MS = 6_000;
 const FX_DURATION_MS = 950;
@@ -160,6 +159,7 @@ export class ArenaController {
     durationMs: DUEL_DURATION_MS,
     watchers: [],
     leaderboard: [],
+    prevChampion: null,
   };
 
   onResult?: (winnerId: string, winnerName: string, loserId: string, loserName: string, now?: number) => void;
@@ -173,6 +173,8 @@ export class ArenaController {
   private internalClearing = false;
   private leaderboardHour = 0;
   private remoteDriven = false;
+  private clockOffset = 0;
+  private hasClockOffset = false;
   private remoteParticipants = new Set<string>();
   private localWatchers: string[] = [];
   private lastRemoteMatchId = 0;
@@ -185,6 +187,10 @@ export class ArenaController {
   setLeaderboard(entries: readonly ArenaLeaderboardEntry[], now = Date.now()): void {
     this.leaderboardHour = beijingHourBucket(now);
     this.state.leaderboard = entries.map((e) => ({ ...e }));
+  }
+
+  setPrevChampion(champion: ArenaChampionRecord | null): void {
+    this.state.prevChampion = champion ? { ...champion } : null;
   }
 
   isBusy(charId: string): boolean {
@@ -210,14 +216,18 @@ export class ArenaController {
   update(now: number): void {
     if (this.sim.synced) return;
 
-    const hour = beijingHourBucket(now);
-    if (!this.leaderboardHour) {
-      this.leaderboardHour = hour;
-    } else if (hour !== this.leaderboardHour) {
-      this.leaderboardHour = hour;
-      if (this.state.leaderboard.length) {
-        this.state.leaderboard = [];
-        this.onLeaderboardReset?.(now);
+    if (!this.remoteDriven) {
+      const hour = beijingHourBucket(now);
+      if (!this.leaderboardHour) {
+        this.leaderboardHour = hour;
+      } else if (hour !== this.leaderboardHour) {
+        const prevHour = this.leaderboardHour;
+        this.leaderboardHour = hour;
+        if (this.state.leaderboard.length) {
+          this.state.prevChampion = { ...this.state.leaderboard[0], hourBucket: prevHour };
+          this.state.leaderboard = [];
+          this.onLeaderboardReset?.(now);
+        }
       }
     }
 
@@ -239,11 +249,8 @@ export class ArenaController {
         if (this.state.phase === 'gather') {
           const ensureGather = (ch: Character | undefined, spot: SpotDef, line: string) => {
             if (!this.isParticipantValid(ch)) return;
-            const onNonArenaSpot = !!ch!.atSpot && !ch!.atSpot.startsWith(ARENA_ID);
-            const idleOutside = !ch!.step && ch!.queue.length === 0 && Math.hypot(ch!.x - spot.x, ch!.y - spot.y) > 12;
-            if (onNonArenaSpot || idleOutside) {
-              this.dispatchToSpot(ch!, spot, true, line, now);
-            }
+            if (this.isHeadingToSpot(ch!, spot)) return;
+            this.dispatchToSpot(ch!, spot, true, line, now);
           };
           ensureGather(leftCur, spots.left, `${rightCur?.info.name || '对手'}，来切磋一局！⚔️`);
           ensureGather(rightCur, spots.right, `正合我意，${leftCur?.info.name || '朋友'}！⚡`);
@@ -366,14 +373,21 @@ export class ArenaController {
   }
 
   /** 由服务端 authoritative SSE `arena` 事件驱动本地演播，无需 10Hz 全量帧同步。 */
-  applyRemoteArenaEvent(ev: SyncedArenaEvent, now = Date.now()): void {
+  applyRemoteArenaEvent(ev: SyncedArenaEvent, receivedAt = Date.now()): void {
     this.remoteDriven = true;
+    const now = receivedAt;
     const prevMatchId = this.lastRemoteMatchId;
     const prevPhase = this.lastRemotePhase;
-    const offset = now - ev.t;
+    const rawOffset = receivedAt - ev.t;
+    if (!this.hasClockOffset || Math.abs(rawOffset - this.clockOffset) > 1500) {
+      this.clockOffset = rawOffset;
+      this.hasClockOffset = true;
+    } else {
+      this.clockOffset = Math.round(this.clockOffset * 0.8 + rawOffset * 0.2);
+    }
     const incoming = ev.arena;
 
-    this.applySynced(incoming, offset);
+    this.applySynced(incoming, this.clockOffset);
     if (incoming.phase !== 'idle' && incoming.matchId === prevMatchId && this.localWatchers.length > 0) {
       this.state.watchers = [...this.localWatchers];
     }
@@ -470,6 +484,36 @@ export class ArenaController {
     this.lastRemotePhase = incoming.phase;
   }
 
+  /** snapshot 到达后仅绑定新出现的参赛角色，不重算事件时间戳或倒计时。 */
+  rebindRemoteParticipants(now = Date.now()): void {
+    if (!this.remoteDriven || this.state.phase === 'idle') return;
+    if (this.placedRemoteMatchId === this.state.matchId) return;
+    const spots = this.ringSpots();
+    const left = this.state.leftId ? this.sim.chars.get(this.state.leftId) : undefined;
+    const right = this.state.rightId ? this.sim.chars.get(this.state.rightId) : undefined;
+    if (!spots || !left || !right) return;
+    if (this.state.phase === 'gather') {
+      this.dispatchToSpot(left, spots.left, true, `${right.info.name}，来切磋一局！⚔️`, now);
+      this.dispatchToSpot(right, spots.right, true, `正合我意，${left.info.name}！⚡`, now);
+    } else {
+      this.snapToSpot(left, spots.left);
+      this.snapToSpot(right, spots.right);
+      if (this.state.phase === 'fight' || this.state.phase === 'finish') {
+        left.dir = 'right';
+        right.dir = 'left';
+      }
+    }
+    this.remoteParticipants.add(left.id);
+    this.remoteParticipants.add(right.id);
+    this.placedRemoteMatchId = this.state.matchId;
+    if (!this.localWatchers.length) {
+      this.state.watchers = [];
+      this.inviteWatchers(now, 4);
+      this.localWatchers = [...this.state.watchers];
+      for (const wid of this.localWatchers) this.remoteParticipants.add(wid);
+    }
+  }
+
   private releaseRemoteParticipants(now: number): void {
     this.internalClearing = true;
     try {
@@ -498,6 +542,7 @@ export class ArenaController {
       watchers: [...this.state.watchers],
       ...(this.state.fx ? { fx: { ...this.state.fx } } : {}),
       leaderboard: this.state.leaderboard.slice(0, 6).map((e) => ({ ...e })),
+      prevChampion: this.state.prevChampion ? { ...this.state.prevChampion } : null,
     };
   }
 
@@ -519,10 +564,17 @@ export class ArenaController {
           }
         : {}),
       leaderboard: remote.leaderboard.map((e) => ({ ...e })),
+      prevChampion: remote.prevChampion ? { ...remote.prevChampion } : null,
     };
   }
 
   // ------------------------------------------------------------------ internal lifecycle
+
+  private isHeadingToSpot(ch: Character, spot: SpotDef): boolean {
+    if (!ch.seated && Math.hypot(ch.x - spot.x, ch.y - spot.y) <= 12) return true;
+    if (ch.step?.t === 'go' && ch.step.tx === spot.tx && ch.step.ty === spot.ty) return true;
+    return ch.queue.some((s) => s.t === 'go' && s.tx === spot.tx && s.ty === spot.ty);
+  }
 
   private isParticipantValid(ch: Character | undefined): boolean {
     return !!ch && !ch.gone && !ch.leaving;
@@ -836,7 +888,11 @@ export class ArenaController {
   private applyResultToLeaderboard(winnerId: string, winnerName: string, loserId: string, loserName: string, now: number): void {
     const hour = beijingHourBucket(now);
     if (hour !== this.leaderboardHour) {
+      const prevHour = this.leaderboardHour;
       this.leaderboardHour = hour;
+      if (this.state.leaderboard.length) {
+        this.state.prevChampion = { ...this.state.leaderboard[0], hourBucket: prevHour };
+      }
       this.state.leaderboard = [];
     }
     const map = new Map(this.state.leaderboard.map((e) => [e.id, { ...e }]));

@@ -11,7 +11,7 @@ import {
 } from '../../shared/appearance';
 import { beijingHourBucket } from '../../shared/beijing';
 import { hash32 } from '../../shared/hash';
-import type { Activity, AgentInfo, AgentPetInfo, AgentStatus, ArenaLeaderboardEntry, OfficeGlobalSettings, OfficeSnapshot, RoomInfo } from '../../shared/types';
+import type { Activity, AgentInfo, AgentPetInfo, AgentStatus, ArenaChampionRecord, ArenaLeaderboardEntry, OfficeGlobalSettings, OfficeSnapshot, RoomInfo } from '../../shared/types';
 import type { PetRegistry } from './pets';
 import { sanitizePetId } from './pets';
 
@@ -47,8 +47,15 @@ export interface MemberRecord {
   sessions: Record<string, SessionState>;
 }
 
-export function defaultCanDuel(avatarMode: 'pet' | 'human', petId?: string, pet?: AgentPetInfo): boolean {
+export function defaultCanDuel(
+  avatarMode: 'pet' | 'human',
+  petId?: string,
+  pet?: AgentPetInfo,
+  petSource?: 'builtin' | 'uploaded' | 'local' | 'pmd',
+): boolean {
   if (avatarMode !== 'pet') return false;
+  if (pet?.kind === 'pmd' || petSource === 'pmd' || (petId && /^pmd:\d{4}$/i.test(petId.trim()))) return true;
+  if (petSource === 'uploaded' || petSource === 'local') return false;
   return isPokemonPet(pet ?? (petId ? { id: petId, spriteUrl: '' } : undefined));
 }
 
@@ -109,6 +116,7 @@ interface PersistedState {
   settings?: SiteSettings;
   arenaLeaderboard?: ArenaLeaderboardEntry[];
   arenaLeaderboardHour?: number;
+  prevArenaChampion?: ArenaChampionRecord;
 }
 
 export function normalizePublicUrl(raw: unknown): { ok: true; value: string | undefined } | { ok: false; error: string } {
@@ -144,6 +152,8 @@ export interface ReportInput {
   appearanceCode?: string;
   customizeCode?: string;
   editToken?: string;
+  canDuel?: boolean;
+  companionCanDuel?: boolean;
   agentTool?: string;
   tool?: string;
   sessionId?: string;
@@ -210,6 +220,7 @@ export class PartyStore {
   private readonly banned = new Map<string, BanRecord>();
   private readonly arenaStats = new Map<string, ArenaLeaderboardEntry>();
   private arenaLeaderboardHour = beijingHourBucket();
+  private prevArenaChampion: ArenaChampionRecord | null = null;
   private readonly listeners = new Set<() => void>();
   private readonly startedAt = Date.now();
   private publicUrl: string | undefined;
@@ -304,20 +315,54 @@ export class PartyStore {
       if (raw.settings && raw.settings.officeSettings) {
         this.officeSettings = sanitizeOfficeSettings(raw.settings.officeSettings, DEFAULT_OFFICE_SETTINGS);
       }
+      if (raw.prevArenaChampion && typeof raw.prevArenaChampion === 'object') {
+        const c = raw.prevArenaChampion;
+        if (
+          typeof c.id === 'string' &&
+          c.id.trim() &&
+          typeof c.wins === 'number' &&
+          Number.isFinite(c.wins) &&
+          typeof c.losses === 'number' &&
+          Number.isFinite(c.losses) &&
+          typeof c.hourBucket === 'number' &&
+          Number.isFinite(c.hourBucket)
+        ) {
+          this.prevArenaChampion = {
+            id: c.id,
+            name: cleanText(c.name, 32) ?? c.id,
+            wins: Math.max(0, Math.floor(c.wins)),
+            losses: Math.max(0, Math.floor(c.losses)),
+            hourBucket: Math.floor(c.hourBucket),
+          };
+        }
+      }
       const currentHour = beijingHourBucket();
       this.arenaLeaderboardHour =
         typeof raw.arenaLeaderboardHour === 'number' && Number.isFinite(raw.arenaLeaderboardHour)
           ? raw.arenaLeaderboardHour
           : currentHour;
-      if (Array.isArray(raw.arenaLeaderboard) && this.arenaLeaderboardHour === currentHour) {
+      const parsedBoard: ArenaLeaderboardEntry[] = [];
+      if (Array.isArray(raw.arenaLeaderboard)) {
         for (const e of raw.arenaLeaderboard) {
           if (!e || typeof e.id !== 'string' || !e.id.trim()) continue;
           const wins = typeof e.wins === 'number' && Number.isFinite(e.wins) ? Math.max(0, Math.floor(e.wins)) : 0;
           const losses = typeof e.losses === 'number' && Number.isFinite(e.losses) ? Math.max(0, Math.floor(e.losses)) : 0;
           const name = cleanText(e.name, 32) ?? e.id;
-          this.arenaStats.set(e.id, { id: e.id, name, wins, losses });
+          parsedBoard.push({ id: e.id, name, wins, losses });
         }
+      }
+      if (parsedBoard.length > 0 && this.arenaLeaderboardHour === currentHour) {
+        for (const e of parsedBoard) this.arenaStats.set(e.id, e);
       } else {
+        if (
+          parsedBoard.length > 0 &&
+          this.arenaLeaderboardHour < currentHour &&
+          (!this.prevArenaChampion || this.arenaLeaderboardHour >= this.prevArenaChampion.hourBucket)
+        ) {
+          const sorted = this.sortArenaEntries(parsedBoard);
+          this.prevArenaChampion = { ...sorted[0], hourBucket: this.arenaLeaderboardHour };
+          this.dirty = true;
+        }
         this.arenaLeaderboardHour = currentHour;
       }
     } catch (err) {
@@ -353,6 +398,7 @@ export class PartyStore {
       banned: [...this.banned.values()],
       ...(Object.keys(settings).length ? { settings } : {}),
       ...(arenaLeaderboard.length ? { arenaLeaderboard, arenaLeaderboardHour: this.arenaLeaderboardHour } : {}),
+      ...(this.prevArenaChampion ? { prevArenaChampion: this.prevArenaChampion } : {}),
     };
     const tmp = `${this.statePath}.tmp`;
     writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8');
@@ -436,6 +482,7 @@ export class PartyStore {
         ...(customParts ? { parts: customParts } : {}),
         avatarMode: hasPet ? 'pet' : 'human',
         ...(hasPet && petSlug ? { petId: petSlug } : {}),
+        ...(typeof raw.canDuel === 'boolean' ? { canDuel: raw.canDuel } : {}),
         editToken: requestedToken ?? this.generateUniqueEditToken(),
         ...(toolName ? { agentTool: toolName } : {}),
         lastStatus: status,
@@ -447,7 +494,7 @@ export class PartyStore {
         },
       };
       this.members.set(id, m);
-      const companion = this.syncCompanion(m, companionPetSlug, companionPetName, now);
+      const companion = this.syncCompanion(m, companionPetSlug, companionPetName, now, raw.companionCanDuel);
       this.emit();
       return { ok: true, member: m, ...(companion ? { companion } : {}) };
     }
@@ -480,6 +527,7 @@ export class PartyStore {
         delete m.petId;
       }
     }
+    if (typeof raw.canDuel === 'boolean') m.canDuel = raw.canDuel;
     if (toolName) m.agentTool = toolName;
     m.lastSeenAt = now;
 
@@ -497,7 +545,7 @@ export class PartyStore {
     if (status === 'session-end') {
       delete m.sessions[sessionId];
       this.recomputeEffectiveStatus(m, now);
-      const companion = this.syncCompanion(m, companionPetSlug, companionPetName, now);
+      const companion = this.syncCompanion(m, companionPetSlug, companionPetName, now, raw.companionCanDuel);
       this.emit();
       return { ok: true, member: m, ...(companion ? { companion } : {}) };
     }
@@ -508,7 +556,7 @@ export class PartyStore {
       lastSeenAt: now,
     };
     this.recomputeEffectiveStatus(m, now);
-    const companion = this.syncCompanion(m, companionPetSlug, companionPetName, now);
+    const companion = this.syncCompanion(m, companionPetSlug, companionPetName, now, raw.companionCanDuel);
     this.emit();
     return { ok: true, member: m, ...(companion ? { companion } : {}) };
   }
@@ -518,6 +566,7 @@ export class PartyStore {
     petSlug: string | null,
     customPetName: string | undefined,
     now: number,
+    companionCanDuel?: boolean,
   ): MemberRecord | undefined {
     const compId = `${owner.id}:pet`;
     const existing = this.members.get(compId);
@@ -536,6 +585,7 @@ export class PartyStore {
     if (!existing && owner.custom) return undefined;
 
     if (!existing && pet && petSlug) {
+      const petSource = this.pets.getPetSource(petSlug);
       const comp: MemberRecord = {
         id: compId,
         ownerId: owner.id,
@@ -545,6 +595,7 @@ export class PartyStore {
         look: 'f',
         avatarMode: 'pet',
         petId: petSlug,
+        canDuel: typeof companionCanDuel === 'boolean' ? companionCanDuel : defaultCanDuel('pet', petSlug, pet, petSource),
         agentTool: '桌宠',
         lastStatus: 'idle',
         statusSince: now,
@@ -564,11 +615,20 @@ export class PartyStore {
         existing.statusSince = now;
       }
       existing.role = `${owner.name}的伙伴`;
+      if (typeof companionCanDuel === 'boolean') {
+        existing.canDuel = companionCanDuel;
+      }
       if (!owner.custom && !existing.custom) {
         if (pet && petSlug) {
+          const petChanged = existing.petId !== petSlug;
           existing.petId = petSlug;
           existing.avatarMode = 'pet';
           existing.name = formatCompanionName(owner.name, pet.displayName, customPetName);
+          if (typeof companionCanDuel === 'boolean') {
+            existing.canDuel = companionCanDuel;
+          } else if (petChanged) {
+            existing.canDuel = defaultCanDuel('pet', petSlug, pet, this.pets.getPetSource(petSlug));
+          }
         } else if (existing.petId) {
           const curPet = this.pets.getPet(existing.petId);
           if (curPet || customPetName) {
@@ -729,7 +789,7 @@ export class PartyStore {
         }
         m.petId = cleanPet;
         m.avatarMode = 'pet';
-        m.canDuel = defaultCanDuel('pet', cleanPet, petInfo);
+        m.canDuel = defaultCanDuel('pet', cleanPet, petInfo, this.pets.getPetSource(cleanPet));
       }
     }
 
@@ -769,9 +829,12 @@ export class PartyStore {
         ok: true;
         member: MemberRecord;
         resolvedParts: AppearanceParts;
+        canDuel: boolean;
         companionPetId?: string;
         companionPetName?: string;
         companionFullName?: string;
+        companionCanDuel?: boolean;
+        companionPetSource?: 'builtin' | 'uploaded' | 'local' | 'pmd';
       }
     | { ok: false; statusCode: number; error: string } {
     const m = this.findMemberByToken(rawCode);
@@ -803,9 +866,13 @@ export class PartyStore {
     let companionPetId: string | undefined;
     let companionPetName: string | undefined;
     let companionFullName: string | undefined;
+    let companionCanDuel: boolean | undefined;
+    let companionPetSource: 'builtin' | 'uploaded' | 'local' | 'pmd' | undefined;
     if (existingComp && existingComp.lastStatus !== 'offline') {
       companionPetId = existingComp.petId;
       companionFullName = existingComp.name;
+      companionCanDuel = this.effectiveCanDuel(existingComp);
+      companionPetSource = existingComp.petId ? this.pets.getPetSource(existingComp.petId) : undefined;
       const prefix = `${m.name}的`;
       companionPetName = existingComp.name.startsWith(prefix)
         ? existingComp.name.slice(prefix.length)
@@ -816,9 +883,12 @@ export class PartyStore {
       ok: true,
       member: m,
       resolvedParts,
+      canDuel: this.effectiveCanDuel(m),
       ...(companionPetId ? { companionPetId } : {}),
       ...(companionPetName ? { companionPetName } : {}),
       ...(companionFullName ? { companionFullName } : {}),
+      ...(companionCanDuel !== undefined ? { companionCanDuel } : {}),
+      ...(companionPetSource ? { companionPetSource } : {}),
     };
   }
 
@@ -830,8 +900,10 @@ export class PartyStore {
       look?: 'f' | 'm';
       seed?: number;
       parts?: unknown;
+      canDuel?: boolean;
       companionPetId?: string | null;
       companionPetName?: string;
+      companionCanDuel?: boolean;
     },
     now = Date.now(),
   ): ReturnType<PartyStore['getMemberByEditToken']> {
@@ -863,7 +935,7 @@ export class PartyStore {
 
     m.avatarMode = 'human';
     delete m.petId;
-    m.canDuel = typeof m.canDuel === 'boolean' ? m.canDuel : false;
+    m.canDuel = typeof patch.canDuel === 'boolean' ? patch.canDuel : (typeof m.canDuel === 'boolean' ? m.canDuel : false);
     m.custom = true;
     m.lastSeenAt = now;
 
@@ -875,11 +947,16 @@ export class PartyStore {
       const cleanPet = sanitizePetId(patch.companionPetId);
       const pet = cleanPet ? this.pets.getPet(cleanPet) : undefined;
       if (cleanPet && pet) {
+        const petSource = this.pets.getPetSource(cleanPet);
+        const nextCompCanDuel =
+          typeof patch.companionCanDuel === 'boolean'
+            ? patch.companionCanDuel
+            : defaultCanDuel('pet', cleanPet, pet, petSource);
         if (existingComp) {
           existingComp.ownerId = m.id;
           existingComp.petId = cleanPet;
           existingComp.avatarMode = 'pet';
-          existingComp.canDuel = defaultCanDuel('pet', cleanPet, pet);
+          existingComp.canDuel = nextCompCanDuel;
           existingComp.name = formatCompanionName(m.name, pet.displayName, patch.companionPetName);
           existingComp.role = `${m.name}的伙伴`;
           existingComp.custom = true;
@@ -897,7 +974,7 @@ export class PartyStore {
             custom: true,
             avatarMode: 'pet',
             petId: cleanPet,
-            canDuel: defaultCanDuel('pet', cleanPet, pet),
+            canDuel: nextCompCanDuel,
             agentTool: '桌宠',
             lastStatus: m.lastStatus === 'offline' ? 'offline' : 'idle',
             statusSince: now,
@@ -915,6 +992,9 @@ export class PartyStore {
         : undefined;
       existingComp.name = formatCompanionName(m.name, curPet?.displayName, shortName);
       existingComp.role = `${m.name}的伙伴`;
+      if (typeof patch.companionCanDuel === 'boolean') {
+        existingComp.canDuel = patch.companionCanDuel;
+      }
       existingComp.custom = true;
       existingComp.lastSeenAt = now;
     }
@@ -990,7 +1070,9 @@ export class PartyStore {
     const id = `npc:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const status: 'idle' | 'working' = input.status === 'working' ? 'working' : 'idle';
     const canDuel =
-      typeof input.canDuel === 'boolean' ? input.canDuel : defaultCanDuel(avatarMode, petId, petInfo);
+      typeof input.canDuel === 'boolean'
+        ? input.canDuel
+        : defaultCanDuel(avatarMode, petId, petInfo, petId ? this.pets.getPetSource(petId) : undefined);
     const customLook = input.look === 'f' || input.look === 'm' ? input.look : (Math.random() < 0.5 ? 'f' : 'm');
     const customSeed = parseSeed(input.seed) ?? randomSeed();
     const customParts = avatarMode === 'human' && input.parts !== undefined ? parseAppearanceParts(input.parts) : null;
@@ -1095,7 +1177,7 @@ export class PartyStore {
       m.canDuel = patch.canDuel;
     } else if (lookChanged) {
       const pet = m.avatarMode === 'pet' && m.petId ? this.pets.getPet(m.petId) : undefined;
-      m.canDuel = defaultCanDuel(m.avatarMode, m.petId, pet);
+      m.canDuel = defaultCanDuel(m.avatarMode, m.petId, pet, m.petId ? this.pets.getPetSource(m.petId) : undefined);
     }
     if (patch.npcAuto !== undefined) {
       m.npcAuto = !!patch.npcAuto;
@@ -1137,11 +1219,22 @@ export class PartyStore {
     return this.receptionSign || DEFAULT_RECEPTION_SIGN;
   }
 
+  private sortArenaEntries(entries: ArenaLeaderboardEntry[]): ArenaLeaderboardEntry[] {
+    return entries.sort(
+      (a, b) => b.wins - a.wins || a.losses - b.losses || a.name.localeCompare(b.name, 'zh-CN'),
+    );
+  }
+
   ensureArenaLeaderboardFresh(now = Date.now()): boolean {
     const bucket = beijingHourBucket(now);
     if (this.arenaLeaderboardHour === bucket) return false;
+    const prevBucket = this.arenaLeaderboardHour;
     this.arenaLeaderboardHour = bucket;
     if (this.arenaStats.size > 0) {
+      const sorted = this.sortArenaEntries([...this.arenaStats.values()]);
+      if (sorted.length > 0) {
+        this.prevArenaChampion = { ...sorted[0], hourBucket: prevBucket };
+      }
       this.arenaStats.clear();
       this.scheduleSave();
       return true;
@@ -1149,11 +1242,14 @@ export class PartyStore {
     return false;
   }
 
+  getPrevArenaChampion(now = Date.now()): ArenaChampionRecord | null {
+    this.ensureArenaLeaderboardFresh(now);
+    return this.prevArenaChampion ? { ...this.prevArenaChampion } : null;
+  }
+
   getArenaLeaderboard(now = Date.now()): ArenaLeaderboardEntry[] {
     this.ensureArenaLeaderboardFresh(now);
-    return [...this.arenaStats.values()].sort(
-      (a, b) => b.wins - a.wins || a.losses - b.losses || a.name.localeCompare(b.name, 'zh-CN'),
-    );
+    return this.sortArenaEntries([...this.arenaStats.values()]);
   }
 
   recordArenaResult(winnerId: string, winnerName: string, loserId: string, loserName: string, now = Date.now()): ArenaLeaderboardEntry[] {
@@ -1201,7 +1297,8 @@ export class PartyStore {
   effectiveCanDuel(m: MemberRecord): boolean {
     if (typeof m.canDuel === 'boolean') return m.canDuel;
     const pet = m.avatarMode === 'pet' && m.petId ? this.pets.getPet(m.petId) : undefined;
-    return defaultCanDuel(m.avatarMode, m.petId, pet);
+    const petSource = m.avatarMode === 'pet' && m.petId ? this.pets.getPetSource(m.petId) : undefined;
+    return defaultCanDuel(m.avatarMode, m.petId, pet, petSource);
   }
 
   setMemberCanDuel(id: string, canDuel: boolean): { ok: true; canDuel: boolean } | { ok: false; error: string; statusCode: number } {
@@ -1209,11 +1306,10 @@ export class PartyStore {
     if (!m) return { ok: false, error: '未找到该成员。', statusCode: 404 };
     m.canDuel = !!canDuel;
     this.emit();
-    this.flush();
     return { ok: true, canDuel: m.canDuel };
   }
 
-  getAdminState() {
+  getAdminLists() {
     let generatedToken = false;
     for (const m of this.members.values()) {
       if (!m.ownerId && !m.editToken) {
@@ -1232,10 +1328,12 @@ export class PartyStore {
       .sort((a, b) => b.joinedAt - a.joinedAt)
       .map((m) => ({ ...m, canDuel: this.effectiveCanDuel(m) }));
     const banned = [...this.banned.values()].sort((a, b) => b.bannedAt - a.bannedAt);
+    return { members, npcs, banned };
+  }
+
+  getAdminState() {
     return {
-      members,
-      npcs,
-      banned,
+      ...this.getAdminLists(),
       pets: this.pets.listPets(),
       settings: {
         publicUrl: this.publicUrl ?? '',

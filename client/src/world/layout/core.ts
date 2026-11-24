@@ -263,8 +263,8 @@ export function layoutArena(col: number): AreaLayout {
   b.walk(6, 0, 4, 2);
   b.area.door = { x: col * COL_W + 6, y: SOUTH_Y, w: 4, h: 2 };
 
-  // 四角绿植装饰（右上墙面留空给挂墙倒计时电视；右下角 12..14, 9..10 留给排行榜立牌）
-  b.furn('plant_tall', 1, 2, 'palm', { order: 0.2 });
+  // 四角绿植装饰（左上角用矮蕨类避免遮挡上届冠军牌；右上墙面留空给挂墙倒计时电视；右下角 12..14, 9..10 留给排行榜立牌）
+  b.furn('plant_small', 1, 2, 'fern', { order: 0.2 });
   b.furn('plant_small', 14, 2, 'fern', { order: 0.21 });
   b.furn('plant_tall', 1, 10, 'monstera', { order: 0.22 });
 

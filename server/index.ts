@@ -12,6 +12,7 @@ import { createStaticHandler } from './http/static';
 import { renderAdminHtml } from './party/admin-page';
 import { renderReportScript, renderWatchScript } from './party/client-scripts';
 import { renderCustomizeHtml } from './party/customize-page';
+import { OfficeFeedTracker } from './party/feed';
 import { parseBoundary, parseMultipart } from './party/multipart';
 import { MAX_PET_SPRITE_BYTES, PetRegistry } from './party/pets';
 import { PokemonService, searchPokemon } from './party/pokemon';
@@ -54,6 +55,7 @@ const pets = new PetRegistry(dataDir, undefined, pokemon, join(rootDir, 'assets'
 const store = new PartyStore({ dataDir, pets });
 const worldSync = new WorldSync(store.toSnapshot(), {
   initialLeaderboard: store.getArenaLeaderboard(),
+  initialPrevChampion: store.getPrevArenaChampion(),
   onArenaResult: (wId, wName, lId, lName, now) => {
     store.recordArenaResult(wId, wName, lId, lName, now);
   },
@@ -62,6 +64,7 @@ const worldSync = new WorldSync(store.toSnapshot(), {
   },
 });
 worldSync.start(250);
+const feedTracker = new OfficeFeedTracker(store.toSnapshot(), worldSync.getArenaEvent());
 
 const sseClients = new Set<http.ServerResponse>();
 
@@ -89,6 +92,8 @@ function broadcastSnapshot(): void {
   const snap = store.toSnapshot();
   worldSync.applySnapshot(snap);
   broadcastSse('snapshot', snap, false);
+  const feedItems = feedTracker.diffSnapshot(snap);
+  if (feedItems.length) broadcastSse('feed', feedItems, true);
 }
 
 store.onChange(() => {
@@ -97,11 +102,8 @@ store.onChange(() => {
 
 worldSync.onArena((ev) => {
   broadcastSse('arena', ev, true);
-});
-
-worldSync.onPreDuelSync((frame) => {
-  broadcastSse('snapshot', store.toSnapshot(), false);
-  broadcastSse('world', frame, false);
+  const feedItems = feedTracker.diffArena(ev);
+  if (feedItems.length) broadcastSse('feed', feedItems, true);
 });
 
 const sweepTimer = setInterval(() => {
@@ -215,6 +217,11 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
 
   if (method === 'GET' && p === '/api/world') {
     sendJson(res, 200, worldSync.getFrame());
+    return true;
+  }
+
+  if (method === 'GET' && p === '/api/arena') {
+    sendJson(res, 200, worldSync.getArenaEvent());
     return true;
   }
 
@@ -466,9 +473,12 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
         look: r.member.look,
         seed: r.member.seed,
         parts: r.resolvedParts,
+        canDuel: r.canDuel,
         ...(r.companionPetId ? { companionPetId: r.companionPetId } : {}),
         ...(r.companionPetName ? { companionPetName: r.companionPetName } : {}),
         ...(r.companionFullName ? { companionFullName: r.companionFullName } : {}),
+        ...(r.companionCanDuel !== undefined ? { companionCanDuel: r.companionCanDuel } : {}),
+        ...(r.companionPetSource ? { companionPetSource: r.companionPetSource } : {}),
         customizeCode: r.member.editToken,
         customizeUrl: `${base}/customize/${r.member.editToken}`,
       },
@@ -483,7 +493,9 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       look?: 'f' | 'm';
       seed?: number;
       parts?: unknown;
+      canDuel?: boolean;
       companionPokemon?: string;
+      companionCanDuel?: boolean;
     }>(req);
     const code = typeof body.code === 'string' ? body.code : '';
     const found = store.getMemberByEditToken(code);
@@ -528,8 +540,10 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       look: body.look,
       seed: body.seed,
       parts: body.parts,
+      ...(typeof body.canDuel === 'boolean' ? { canDuel: body.canDuel } : {}),
       companionPetId,
       companionPetName,
+      ...(typeof body.companionCanDuel === 'boolean' ? { companionCanDuel: body.companionCanDuel } : {}),
     });
     if (!updated.ok) {
       sendJson(res, updated.statusCode, { ok: false, error: updated.error });
@@ -548,9 +562,12 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
         look: updated.member.look,
         seed: updated.member.seed,
         parts: updated.resolvedParts,
+        canDuel: updated.canDuel,
         ...(updated.companionPetId ? { companionPetId: updated.companionPetId } : {}),
         ...(updated.companionPetName ? { companionPetName: updated.companionPetName } : {}),
         ...(updated.companionFullName ? { companionFullName: updated.companionFullName } : {}),
+        ...(updated.companionCanDuel !== undefined ? { companionCanDuel: updated.companionCanDuel } : {}),
+        ...(updated.companionPetSource ? { companionPetSource: updated.companionPetSource } : {}),
         customizeCode: updated.member.editToken,
         customizeUrl: `${base}/customize/${updated.member.editToken}`,
       },
@@ -676,7 +693,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     if (method === 'POST' && kickMatch) {
       const id = decodeURIComponent(kickMatch[1]);
       const ok = store.kickMember(id);
-      sendJson(res, ok ? 200 : 404, ok ? { ok: true } : { error: 'Member not found' });
+      sendJson(res, ok ? 200 : 404, ok ? { ok: true, ...store.getAdminLists() } : { error: 'Member not found' });
       return true;
     }
 
@@ -685,7 +702,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       const id = decodeURIComponent(banMatch[1]);
       const body = await readJson<{ reason?: string }>(req);
       store.banMember(id, body.reason);
-      sendJson(res, 200, { ok: true });
+      sendJson(res, 200, { ok: true, ...store.getAdminLists() });
       return true;
     }
 
@@ -693,7 +710,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     if (method === 'DELETE' && unbanMatch) {
       const id = decodeURIComponent(unbanMatch[1]);
       const ok = store.unbanMember(id);
-      sendJson(res, ok ? 200 : 404, ok ? { ok: true } : { error: 'Ban record not found' });
+      sendJson(res, ok ? 200 : 404, ok ? { ok: true, ...store.getAdminLists() } : { error: 'Ban record not found' });
       return true;
     }
 
@@ -701,7 +718,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       const body = await readJson<Parameters<PartyStore['createNpc']>[0]>(req);
       const r = store.createNpc(body);
       if (!r.ok) sendJson(res, 400, { error: r.error });
-      else sendJson(res, 200, { ok: true, npc: r.npc });
+      else sendJson(res, 200, { ok: true, npc: { ...r.npc, canDuel: store.effectiveCanDuel(r.npc) } });
       return true;
     }
 
@@ -711,14 +728,14 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       const body = await readJson<Parameters<PartyStore['updateNpc']>[1]>(req);
       const r = store.updateNpc(id, body);
       if (!r.ok) sendJson(res, r.statusCode, { error: r.error });
-      else sendJson(res, 200, { ok: true, npc: r.npc });
+      else sendJson(res, 200, { ok: true, npc: { ...r.npc, canDuel: store.effectiveCanDuel(r.npc) } });
       return true;
     }
 
     if (npcMatch && method === 'DELETE') {
       const id = decodeURIComponent(npcMatch[1]);
       const ok = store.deleteNpc(id);
-      sendJson(res, ok ? 200 : 404, ok ? { ok: true } : { error: 'NPC not found' });
+      sendJson(res, ok ? 200 : 404, ok ? { ok: true, deletedId: id } : { error: 'NPC not found' });
       return true;
     }
 

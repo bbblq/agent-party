@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentPetInfo, CodexV2Spec, CodexV2StateSpec } from '../../shared/types';
@@ -37,6 +37,17 @@ export function sanitizePetId(raw: string): string | null {
   if (PMD_ID_RE.test(trimmed)) return trimmed;
   if (!SAFE_ID_RE.test(trimmed)) return null;
   return trimmed;
+}
+
+function readFileHead(filePath: string, bytes = 64): Buffer {
+  const fd = openSync(filePath, 'r');
+  try {
+    const buf = Buffer.allocUnsafe(bytes);
+    const n = readSync(fd, buf, 0, bytes, 0);
+    return buf.subarray(0, n);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 export function detectSpriteMime(buf: Buffer): 'image/webp' | 'image/png' | null {
@@ -210,7 +221,7 @@ export class PetRegistry {
           try {
             const st = statSync(full);
             if (!st.isFile() || st.size <= 0 || st.size > MAX_PET_SPRITE_BYTES) continue;
-            const head = readFileSync(full).subarray(0, 64);
+            const head = readFileHead(full, 64);
             const mime = detectSpriteMime(head);
             if (!mime) continue;
             spritePath = full;
@@ -293,6 +304,14 @@ export class PetRegistry {
     if (!rec) return undefined;
     const { id: petId, displayName, spriteUrl, hasBackView, spec } = rec.item;
     return { id: petId, displayName, kind: 'codex-v2', spriteUrl, ...(hasBackView !== undefined ? { hasBackView } : {}), spec };
+  }
+
+  getPetSource(rawId: string | null | undefined): 'builtin' | 'uploaded' | 'local' | 'pmd' | undefined {
+    if (!rawId) return undefined;
+    const clean = sanitizePetId(rawId);
+    if (!clean) return undefined;
+    if (PMD_ID_RE.test(clean)) return 'pmd';
+    return this.cache.get(clean)?.item.source;
   }
 
   getPetSpriteFile(id: string): { filePath: string; contentType: 'image/webp' | 'image/png' } | null {

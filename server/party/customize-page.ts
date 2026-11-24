@@ -19,6 +19,18 @@ import {
   TIE_COLORS,
   TOP_COLORS,
 } from '../../shared/world/appearance-flat';
+import rawPokedex from './pokemon-db.json';
+
+interface RawPokeItem {
+  dex: string;
+  en: string;
+  zh_hans?: string;
+  zh_hant?: string;
+}
+
+const ALL_POKEMON_JSON = JSON.stringify(
+  (rawPokedex as RawPokeItem[]).map((p) => [p.dex, p.zh_hans || p.en, p.en, p.zh_hant || '']),
+).replaceAll('<', '\\u003c');
 
 function escapeHtmlAttr(s: string): string {
   return s
@@ -250,12 +262,77 @@ export function renderCustomizeHtml(baseUrl: string, initialCode = ''): string {
       background: rgba(127, 29, 29, 0.25);
       color: #fecaca;
     }
-    .pet-quick {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 5px;
+    .pet-search-panel {
       margin-top: 6px;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      background: #0a0f18;
+      overflow: hidden;
     }
+    .pet-search-meta {
+      padding: 5px 9px;
+      font-size: 11px;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      background: #0f1624;
+    }
+    .pet-search-list {
+      max-height: 188px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+    .pet-opt {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      width: 100%;
+      padding: 6px 10px;
+      border: none;
+      border-bottom: 1px solid rgba(40, 51, 74, 0.45);
+      background: transparent;
+      color: var(--text);
+      font-size: 12px;
+      text-align: left;
+      cursor: pointer;
+    }
+    .pet-opt:last-child { border-bottom: none; }
+    .pet-opt:hover { background: rgba(82, 196, 255, 0.12); }
+    .pet-opt.active {
+      background: rgba(82, 196, 255, 0.2);
+      color: #ffffff;
+      font-weight: 600;
+    }
+    .pet-opt.none-opt { color: #fca5a5; }
+    .pet-opt-sub { color: var(--muted); font-size: 11px; flex-shrink: 0; }
+    .duel-box {
+      background: #0b101b;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-bottom: 11px;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+    .duel-box-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent);
+    }
+    .duel-check {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12.5px;
+      color: var(--text);
+      cursor: pointer;
+      margin: 0;
+    }
+    .duel-check.disabled { opacity: 0.55; cursor: not-allowed; }
+    .duel-check input { width: auto; margin: 0; }
+    .duel-hint { font-size: 11px; color: var(--muted); line-height: 1.4; }
   </style>
 </head>
 <body>
@@ -289,9 +366,9 @@ export function renderCustomizeHtml(baseUrl: string, initialCode = ''): string {
         <div class="preview-box">
           <canvas id="preview" width="168" height="238"></canvas>
           <div class="look-row">
-            <button class="btn btn-sm" id="look-m" type="button">👦 风格 A</button>
-            <button class="btn btn-sm" id="look-f" type="button">👧 风格 B</button>
-            <button class="btn btn-sm" id="reroll-btn" type="button">🎲 随机穿搭</button>
+            <button class="btn btn-sm" id="look-m" type="button">👦 随机男生</button>
+            <button class="btn btn-sm" id="look-f" type="button">👧 随机女生</button>
+            <button class="btn btn-sm" id="reroll-btn" type="button">🎲 全随机</button>
           </div>
         </div>
 
@@ -304,18 +381,27 @@ export function renderCustomizeHtml(baseUrl: string, initialCode = ''): string {
           <input id="inp-role" type="text" maxlength="32" placeholder="例如：全栈开发 / AI 伙伴" />
         </div>
         <div class="field">
-          <label for="inp-pet">伴随宝可梦（填名字/编号；选“不带宠物”可移除）</label>
-          <input id="inp-pet" type="text" maxlength="32" placeholder="例如：皮卡丘 / 可达鸭 / 耿鬼" />
-          <div class="pet-quick" id="pet-quick-chips">
-            <button class="chip" type="button" data-pet="皮卡丘">皮卡丘</button>
-            <button class="chip" type="button" data-pet="可达鸭">可达鸭</button>
-            <button class="chip" type="button" data-pet="耿鬼">耿鬼</button>
-            <button class="chip" type="button" data-pet="伊布">伊布</button>
-            <button class="chip" type="button" data-pet="卡比兽">卡比兽</button>
-            <button class="chip" type="button" data-pet="喷火龙">喷火龙</button>
-            <button class="chip" type="button" data-pet="路卡利欧">路卡利欧</button>
-            <button class="chip" type="button" data-pet="">不带宠物</button>
+          <label for="inp-pet">伴随宝可梦（支持搜索全部 ${(rawPokedex as RawPokeItem[]).length} 只宝可梦；点「不带宠物」可移除）</label>
+          <div style="display:flex;gap:6px">
+            <input id="inp-pet" type="text" maxlength="32" placeholder="输入中文 / 英文 / 编号搜索（如 皮卡丘、0025）" autocomplete="off" />
+            <button class="btn btn-sm" id="clear-pet-btn" type="button" style="white-space:nowrap">不带宠物</button>
           </div>
+          <div class="pet-search-panel">
+            <div class="pet-search-meta" id="pet-search-meta">输入关键词筛选，或直接点选下方宝可梦</div>
+            <div class="pet-search-list" id="pet-search-list"></div>
+          </div>
+        </div>
+        <div class="duel-box">
+          <div class="duel-box-title">⚔️ 宝可梦决斗场参战设置</div>
+          <label class="duel-check">
+            <input id="opt-self-duel" type="checkbox" />
+            <span>我的角色参加宝可梦决斗（默认不参加）</span>
+          </label>
+          <label class="duel-check" id="opt-pet-duel-label">
+            <input id="opt-pet-duel" type="checkbox" />
+            <span>我的伴随宠物参加决斗</span>
+          </label>
+          <div class="duel-hint" id="pet-duel-hint">从系统领取的宝可梦默认参战；自带桌宠（如上传的桌宠/大肥鱼）默认不参战，可手动勾选开启。</div>
         </div>
         <div class="field">
           <label for="inp-server">后台服务器地址</label>
@@ -351,12 +437,17 @@ export function renderCustomizeHtml(baseUrl: string, initialCode = ''): string {
   <script>
     const DATA = ${paletteData};
     const INITIAL_CODE = ${initialCodeJson};
+    const ALL_POKEMON = ${ALL_POKEMON_JSON};
+    const POPULAR_DEX = ['0025', '0054', '0094', '0133', '0143', '0006', '0448', '0001', '0004', '0007', '0039', '0150', '0151'];
     const $ = (id) => document.getElementById(id);
 
     const state = {
       name: '',
       role: 'AI 伙伴',
       companionPokemon: '',
+      canDuel: false,
+      companionCanDuel: false,
+      companionSource: '',
       look: 'm',
       seed: 20261124,
       parts: {
@@ -511,8 +602,6 @@ export function renderCustomizeHtml(baseUrl: string, initialCode = ''): string {
     let previewSeq = 0;
     async function refreshPreview() {
       $('code-out').textContent = currentCode();
-      $('look-m').classList.toggle('btn-primary', state.look === 'm');
-      $('look-f').classList.toggle('btn-primary', state.look === 'f');
 
       const seq = ++previewSeq;
       const base = ($('inp-server').value.trim() || serverDefault).replace(/\\/+$/, '');
@@ -553,6 +642,7 @@ export function renderCustomizeHtml(baseUrl: string, initialCode = ''): string {
           rows: [
             { key: 'skin', label: '肤色', kind: 'color', list: DATA.skins },
             { key: 'eyes', label: '瞳色', kind: 'color', list: DATA.eyes },
+            { key: 'look', label: '唇色', kind: 'look', list: ['m', 'f'] },
             { key: 'facialHair', label: '胡须', kind: 'style', list: DATA.facialHair },
           ],
         },
@@ -615,12 +705,19 @@ export function renderCustomizeHtml(baseUrl: string, initialCode = ''): string {
               b.className = 'swatch' + (state.parts[r.key] === val ? ' active' : '');
               b.style.background = val;
               b.title = val;
+            } else if (r.kind === 'look') {
+              b.className = 'chip' + (state.look === val ? ' active' : '');
+              b.textContent = val === 'f' ? '红润唇色' : '自然唇色';
             } else {
               b.className = 'chip' + (state.parts[r.key] === val ? ' active' : '');
               b.textContent = (DATA.labels[r.key] && DATA.labels[r.key][val]) || val;
             }
             b.addEventListener('click', () => {
-              state.parts[r.key] = val;
+              if (r.kind === 'look') {
+                state.look = val;
+              } else {
+                state.parts[r.key] = val;
+              }
               renderControls();
               void refreshPreview();
             });
@@ -633,24 +730,35 @@ export function renderCustomizeHtml(baseUrl: string, initialCode = ''): string {
       }
     }
 
-    function randomizeLook() {
+    function randomizeLook(preset) {
       const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-      state.look = Math.random() < 0.5 ? 'm' : 'f';
+      const look = preset || (Math.random() < 0.5 ? 'm' : 'f');
+      const maleHairs = ['short', 'buzz', 'spiky', 'side_part', 'curly', 'afro', 'mohawk', 'bald'].filter((x) => DATA.hairStyles.includes(x));
+      const femaleHairs = ['bob', 'long', 'ponytail', 'bun', 'pigtails', 'wavy', 'curly', 'short'].filter((x) => DATA.hairStyles.includes(x));
+      const maleTops = ['tshirt', 'hoodie', 'shirt_tie', 'sweater', 'jacket', 'polo'].filter((x) => DATA.topStyles.includes(x));
+      const femaleTops = ['blouse', 'sweater', 'hoodie', 'tshirt', 'jacket', 'polo'].filter((x) => DATA.topStyles.includes(x));
+      const maleBottoms = ['pants', 'shorts'].filter((x) => DATA.bottomStyles.includes(x));
+      const femaleBottoms = ['skirt', 'pants', 'shorts'].filter((x) => DATA.bottomStyles.includes(x));
+      const maleAccs = ['glasses', 'sunglasses', 'headphones', 'cap', 'beanie'].filter((x) => DATA.accessories.includes(x));
+      const femaleAccs = ['glasses', 'sunglasses', 'headphones', 'beanie', 'earrings', 'bow'].filter((x) => DATA.accessories.includes(x));
+
+      state.look = look;
       state.seed = (Math.floor(Math.random() * 0xffffffff) >>> 0) || 1;
       state.parts.skin = pick(DATA.skins);
-      state.parts.hairStyle = pick(DATA.hairStyles);
+      state.parts.hairStyle = pick(look === 'f' && femaleHairs.length ? femaleHairs : (maleHairs.length ? maleHairs : DATA.hairStyles));
       state.parts.hair = pick(DATA.hairColors);
       state.parts.eyes = pick(DATA.eyes);
-      state.parts.topStyle = pick(DATA.topStyles);
+      state.parts.topStyle = pick(look === 'f' && femaleTops.length ? femaleTops : (maleTops.length ? maleTops : DATA.topStyles));
       const tp = topPalettes(state.parts.topStyle);
       state.parts.top = pick(tp.top);
       state.parts.topAccent = pick(tp.topAccent);
-      state.parts.bottomStyle = pick(DATA.bottomStyles);
+      state.parts.bottomStyle = pick(look === 'f' && femaleBottoms.length ? femaleBottoms : (maleBottoms.length ? maleBottoms : DATA.bottomStyles));
       state.parts.bottom = pick(DATA.bottomColors);
       state.parts.shoes = pick(DATA.shoeColors);
-      state.parts.accessory = Math.random() < 0.55 ? 'none' : pick(DATA.accessories);
+      const accPool = look === 'f' && femaleAccs.length ? femaleAccs : (maleAccs.length ? maleAccs : DATA.accessories);
+      state.parts.accessory = Math.random() < 0.5 ? 'none' : pick(accPool);
       state.parts.accessoryColor = pick(DATA.accColors[state.parts.accessory] || DATA.accColors.none);
-      state.parts.facialHair = state.look === 'm' && Math.random() < 0.25 ? pick(DATA.facialHair) : 'none';
+      state.parts.facialHair = look === 'm' && Math.random() < 0.25 ? pick(DATA.facialHair) : 'none';
       renderControls();
       void refreshPreview();
     }
@@ -663,12 +771,123 @@ export function renderCustomizeHtml(baseUrl: string, initialCode = ''): string {
       return m ? m[1] : '';
     }
 
-    function syncPetQuickChips() {
+    function matchPokemonEntry(raw) {
+      const q = String(raw || '').trim().toLowerCase().replace(/^#/, '');
+      if (!q) return null;
+      const numQ = /^\\d+$/.test(q) ? String(Number(q)).padStart(4, '0') : '';
+      return ALL_POKEMON.find((p) => {
+        const dex = p[0];
+        const zh = p[1].toLowerCase();
+        const en = p[2].toLowerCase();
+        const zht = p[3].toLowerCase();
+        return (numQ && dex === numQ) || dex === q || zh === q || en === q || zht === q;
+      }) || null;
+    }
+
+    function filterPokemon(query) {
+      const q = String(query || '').trim().toLowerCase().replace(/^#/, '');
+      if (!q) {
+        const popSet = new Set(POPULAR_DEX);
+        const byDex = new Map(ALL_POKEMON.map((p) => [p[0], p]));
+        const head = POPULAR_DEX.map((d) => byDex.get(d)).filter(Boolean);
+        const rest = ALL_POKEMON.filter((p) => !popSet.has(p[0]));
+        return head.concat(rest);
+      }
+      const exact = [];
+      const prefix = [];
+      const substr = [];
+      const isDigits = /^\\d+$/.test(q);
+      const numStr = isDigits ? String(Number(q)) : '';
+      for (const p of ALL_POKEMON) {
+        const dex = p[0];
+        const idStr = String(Number(dex));
+        const zh = p[1].toLowerCase();
+        const en = p[2].toLowerCase();
+        const zht = p[3].toLowerCase();
+        if ((isDigits && idStr === numStr) || dex === q || zh === q || en === q || zht === q) {
+          exact.push(p);
+        } else if ((isDigits && (dex.startsWith(q) || idStr.startsWith(q))) || zh.startsWith(q) || en.startsWith(q) || zht.startsWith(q)) {
+          prefix.push(p);
+        } else if ((isDigits && dex.includes(q)) || zh.includes(q) || en.includes(q) || zht.includes(q)) {
+          substr.push(p);
+        }
+      }
+      return exact.concat(prefix, substr);
+    }
+
+    function syncDuelControls() {
+      const hasPet = !!$('inp-pet').value.trim();
+      $('opt-self-duel').checked = !!state.canDuel;
+      $('opt-pet-duel').disabled = !hasPet;
+      $('opt-pet-duel').checked = hasPet ? !!state.companionCanDuel : false;
+      $('opt-pet-duel-label').classList.toggle('disabled', !hasPet);
+      if (!hasPet) {
+        $('pet-duel-hint').textContent = '当前未携带伴随宠物；选择宝可梦后系统默认开启决斗，可随时取消。';
+      } else if (state.companionSource === 'uploaded' || state.companionSource === 'local') {
+        $('pet-duel-hint').textContent = '当前为自带桌宠（默认不参加决斗，可手动勾选开启）。';
+      } else {
+        $('pet-duel-hint').textContent = '系统宝可梦默认参加决斗；如需仅在办公室陪跑围观，可取消勾选。';
+      }
+    }
+
+    function renderPetList() {
       const cur = $('inp-pet').value.trim();
-      const chips = $('pet-quick-chips').querySelectorAll('[data-pet]');
-      for (const ch of chips) {
-        const val = ch.getAttribute('data-pet') || '';
-        ch.classList.toggle('active', val === cur);
+      const curLow = cur.toLowerCase();
+      const matches = filterPokemon(cur);
+      const shown = matches.slice(0, 80);
+      const listEl = $('pet-search-list');
+      const metaEl = $('pet-search-meta');
+      metaEl.textContent = cur
+        ? ('匹配到 ' + matches.length + ' 只宝可梦' + (matches.length > shown.length ? '（显示前 ' + shown.length + ' 只）' : ''))
+        : ('共支持 ' + ALL_POKEMON.length + ' 只宝可梦（热门排前，输入中文/英文/编号筛选）');
+
+      listEl.innerHTML = '';
+      const noneBtn = document.createElement('button');
+      noneBtn.type = 'button';
+      noneBtn.className = 'pet-opt none-opt' + (!cur ? ' active' : '');
+      noneBtn.innerHTML = '<span>🚫 不带宠物（移除当前伴随宠物）</span><span class="pet-opt-sub">清除</span>';
+      noneBtn.addEventListener('click', () => {
+        $('inp-pet').value = '';
+        state.companionSource = '';
+        state.companionCanDuel = false;
+        syncDuelControls();
+        renderPetList();
+        $('code-out').textContent = currentCode();
+      });
+      listEl.append(noneBtn);
+
+      for (const p of shown) {
+        const dex = p[0];
+        const zh = p[1];
+        const en = p[2];
+        const isAct = !!cur && (zh.toLowerCase() === curLow || en.toLowerCase() === curLow || dex === curLow || String(Number(dex)) === curLow);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'pet-opt' + (isAct ? ' active' : '');
+        const leftSpan = document.createElement('span');
+        leftSpan.textContent = '#' + dex + ' ' + zh;
+        const rightSpan = document.createElement('span');
+        rightSpan.className = 'pet-opt-sub';
+        rightSpan.textContent = en !== zh ? en : '';
+        btn.append(leftSpan, rightSpan);
+        btn.addEventListener('click', () => {
+          $('inp-pet').value = zh;
+          state.companionSource = 'pmd';
+          state.companionCanDuel = true;
+          syncDuelControls();
+          renderPetList();
+          $('code-out').textContent = currentCode();
+        });
+        listEl.append(btn);
+      }
+
+      if (matches.length > shown.length) {
+        const foot = document.createElement('div');
+        foot.className = 'pet-search-meta';
+        foot.style.borderTop = '1px solid var(--border)';
+        foot.style.borderBottom = 'none';
+        foot.textContent = '还有 ' + (matches.length - shown.length) + ' 只宝可梦未展开，请输入关键词继续筛选…';
+        listEl.append(foot);
       }
     }
 
@@ -685,10 +904,20 @@ export function renderCustomizeHtml(baseUrl: string, initialCode = ''): string {
       $('inp-name').value = profile.name || '';
       $('inp-role').value = profile.role || '';
       $('inp-pet').value = profile.companionPetName || '';
+      state.canDuel = !!profile.canDuel;
+      state.companionSource = profile.companionPetSource || (profile.companionPetId && /^pmd:/i.test(profile.companionPetId) ? 'pmd' : '');
+      if (typeof profile.companionCanDuel === 'boolean') {
+        state.companionCanDuel = profile.companionCanDuel;
+      } else if (profile.companionPetId) {
+        state.companionCanDuel = state.companionSource === 'pmd';
+      } else {
+        state.companionCanDuel = false;
+      }
       if (profile.look === 'f' || profile.look === 'm') state.look = profile.look;
       if (typeof profile.seed === 'number') state.seed = profile.seed >>> 0;
       if (profile.parts && typeof profile.parts === 'object') Object.assign(state.parts, profile.parts);
-      syncPetQuickChips();
+      syncDuelControls();
+      renderPetList();
       renderControls();
       void refreshPreview();
 
@@ -736,21 +965,40 @@ export function renderCustomizeHtml(baseUrl: string, initialCode = ''): string {
       }
     }
 
-    $('look-m').addEventListener('click', () => { state.look = 'm'; void refreshPreview(); });
-    $('look-f').addEventListener('click', () => { state.look = 'f'; void refreshPreview(); });
-    $('reroll-btn').addEventListener('click', randomizeLook);
+    $('look-m').addEventListener('click', () => randomizeLook('m'));
+    $('look-f').addEventListener('click', () => randomizeLook('f'));
+    $('reroll-btn').addEventListener('click', () => randomizeLook());
     $('inp-name').addEventListener('input', () => { $('code-out').textContent = currentCode(); });
     $('inp-role').addEventListener('input', () => { $('code-out').textContent = currentCode(); });
     $('inp-pet').addEventListener('input', () => {
-      syncPetQuickChips();
+      const val = $('inp-pet').value.trim();
+      if (!val) {
+        state.companionSource = '';
+        state.companionCanDuel = false;
+      } else if (matchPokemonEntry(val)) {
+        state.companionSource = 'pmd';
+        state.companionCanDuel = true;
+      } else {
+        state.companionSource = 'uploaded';
+        state.companionCanDuel = false;
+      }
+      syncDuelControls();
+      renderPetList();
       $('code-out').textContent = currentCode();
     });
-    $('pet-quick-chips').addEventListener('click', (e) => {
-      const btn = e.target && e.target.closest ? e.target.closest('[data-pet]') : null;
-      if (!btn) return;
-      $('inp-pet').value = btn.getAttribute('data-pet') || '';
-      syncPetQuickChips();
+    $('clear-pet-btn').addEventListener('click', () => {
+      $('inp-pet').value = '';
+      state.companionSource = '';
+      state.companionCanDuel = false;
+      syncDuelControls();
+      renderPetList();
       $('code-out').textContent = currentCode();
+    });
+    $('opt-self-duel').addEventListener('change', () => {
+      state.canDuel = $('opt-self-duel').checked;
+    });
+    $('opt-pet-duel').addEventListener('change', () => {
+      state.companionCanDuel = $('opt-pet-duel').checked;
     });
     $('load-token-btn').addEventListener('click', () => {
       void loadProfileByCode($('inp-token').value, false);
@@ -818,14 +1066,16 @@ export function renderCustomizeHtml(baseUrl: string, initialCode = ''): string {
               look: state.look,
               seed: state.seed >>> 0,
               parts: state.parts,
+              canDuel: !!state.canDuel,
               companionPokemon: pet,
+              ...(pet ? { companionCanDuel: !!state.companionCanDuel } : {}),
             }),
           });
           const data = await res.json().catch(() => ({}));
           if (!res.ok || !data.ok || !data.profile) throw new Error(data.error || ('HTTP ' + res.status));
           applyProfile(data.profile);
           msg.style.color = 'var(--ok)';
-          msg.textContent = '✅ 已保存成功！办公室大屏已实时更新你的形象、职位与伴随宝可梦。';
+          msg.textContent = '✅ 已保存成功！办公室大屏已实时更新你的形象、职位、决斗设置与伴随宝可梦。';
         } else {
           const code = currentCode();
           const res = await fetch(base + '/api/report', {
@@ -837,7 +1087,8 @@ export function renderCustomizeHtml(baseUrl: string, initialCode = ''): string {
               role,
               status: 'idle',
               appearanceCode: code,
-              ...(pet ? { companionPokemon: pet } : {}),
+              canDuel: !!state.canDuel,
+              ...(pet ? { companionPokemon: pet, companionCanDuel: !!state.companionCanDuel } : {}),
             }),
           });
           const data = await res.json().catch(() => ({}));
@@ -874,11 +1125,16 @@ export function renderCustomizeHtml(baseUrl: string, initialCode = ''): string {
         const obj = JSON.parse(b64UrlToUtf8(m[1]));
         if (obj.name) $('inp-name').value = obj.name;
         if (obj.role) $('inp-role').value = obj.role;
-        if (obj.companionPokemon) $('inp-pet').value = obj.companionPokemon;
+        if (obj.companionPokemon) {
+          $('inp-pet').value = obj.companionPokemon;
+          state.companionSource = matchPokemonEntry(obj.companionPokemon) ? 'pmd' : 'uploaded';
+          state.companionCanDuel = state.companionSource === 'pmd';
+        }
         if (obj.look === 'f' || obj.look === 'm') state.look = obj.look;
         if (typeof obj.seed === 'number') state.seed = obj.seed >>> 0;
         if (obj.parts && typeof obj.parts === 'object') Object.assign(state.parts, obj.parts);
-        syncPetQuickChips();
+        syncDuelControls();
+        renderPetList();
         renderControls();
         void refreshPreview();
         msg.style.color = 'var(--ok)';
@@ -889,7 +1145,8 @@ export function renderCustomizeHtml(baseUrl: string, initialCode = ''): string {
       }
     });
 
-    syncPetQuickChips();
+    syncDuelControls();
+    renderPetList();
     renderControls();
     void refreshPreview();
 

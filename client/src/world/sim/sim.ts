@@ -6,7 +6,7 @@ import type { ArtModule, Dir, HeldItem, IconName, Pose, RoomTheme } from '../../
 import type { WorldOptions } from '../api';
 import { COL_W, COMPACT_DELAY_MS, DISMANTLE_DELAY_MS, FOOT_DX, FOOT_DY, MISSING_DEBOUNCE_MS, RUN_SPEED, TILE, WALK_SPEED } from '../constants';
 import { assembleBuilding, type BuildingLayout } from '../layout/building';
-import { RECEPTION_ID } from '../layout/core';
+import { CAFE_ID, LOUNGE_ID, RECEPTION_ID } from '../layout/core';
 import { columnsFor, inRect, slotAt } from '../layout/geometry';
 import { layoutProjectRoom } from '../layout/room';
 import type { SpotDef, SpotKind } from '../layout/types';
@@ -1714,6 +1714,7 @@ export class Sim {
         steps.push({ t: 'act', pose: 'use', ms: 1900, machine: s.furnitureId, icon: 'coffee' }, { t: 'act', pose: 'drink', held: 'coffee', ms: 2600 });
         release(s);
         carry = 'coffee';
+        this.social.pushLeisureEvent(ch, '☕', '去茶水间冲了杯咖啡', CAFE_ID, now);
         if (rng() < 0.45) {
           const seat = this.spots.findFree('cafe_seat', {
             by: ch.id,
@@ -1741,6 +1742,7 @@ export class Sim {
         steps.push({ t: 'act', pose: 'use', ms: 1000 }, { t: 'act', pose: 'drink', held: 'water', ms: 2500 });
         release(s);
         carry = rng() < 0.4 ? 'water' : 'none';
+        this.social.pushLeisureEvent(ch, '💧', '去接了杯水歇口气', CAFE_ID, now);
         break;
       }
       case 'bathroom': {
@@ -1780,6 +1782,7 @@ export class Sim {
         this.pushLeave(ch, steps);
         steps.push({ t: 'go', tx: s.tx, ty: s.ty }, { t: 'enter', spot: s.id }, { t: 'act', pose: 'read', held: 'phone', ms: between(rng, 8000, 18000) }, { t: 'exit' });
         release(s);
+        this.social.pushLeisureEvent(ch, '📱', '窝在休息区刷起了手机', LOUNGE_ID, now);
         break;
       }
       case 'window': {
@@ -1809,6 +1812,7 @@ export class Sim {
         goUse(s);
         steps.push({ t: 'act', pose: 'use', ms: between(rng, 6000, 12000), icon: rng() < 0.4 ? 'star' : undefined });
         release(s);
+        this.social.pushLeisureEvent(ch, '🕹️', '去休息区玩起了街机', LOUNGE_ID, now);
         break;
       }
       case 'snack': {
@@ -1819,6 +1823,7 @@ export class Sim {
         goUse(s);
         steps.push({ t: 'act', pose: 'use', ms: 1600 }, { t: 'act', pose: 'stand', ms: 900 });
         release(s);
+        this.social.pushLeisureEvent(ch, '🍪', '去茶水间找零食吃', CAFE_ID, now);
         break;
       }
       case 'stretch': {

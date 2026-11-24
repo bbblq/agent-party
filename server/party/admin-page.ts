@@ -145,7 +145,8 @@ export function renderAdminHtml(): string {
       text-decoration: none;
       cursor: pointer;
     }
-    .btn:hover { border-color: var(--accent); }
+    .btn:hover:not(:disabled) { border-color: var(--accent); }
+    .btn:disabled { opacity: 0.55; cursor: not-allowed; }
     .btn-sm { padding: 5px 10px; font-size: 12px; border-radius: 8px; }
     .btn-primary {
       background: linear-gradient(135deg, #2b8cff, #47c5ff);
@@ -277,17 +278,82 @@ export function renderAdminHtml(): string {
     .pill.tool { background: rgba(167, 139, 250, 0.18); color: #ddd6fe; }
     .actions { display: flex; gap: 6px; flex-wrap: wrap; }
     .err { color: #ff8e99; font-size: 13px; margin-top: 8px; }
-    .upload-box {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 8px;
-      padding: 10px 12px;
-      border-radius: 10px;
-      border: 1px dashed var(--border);
+    .upload-panel {
+      padding: 14px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
       background: #0b0f17;
       margin-bottom: 14px;
     }
+    .upload-panel-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 10px;
+    }
+    .upload-drops {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .upload-drop {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 12px;
+      border-radius: 10px;
+      background: var(--panel);
+      border: 1px dashed var(--border);
+    }
+    .upload-drop.required {
+      border-color: rgba(82, 196, 255, 0.5);
+      background: rgba(82, 196, 255, 0.05);
+    }
+    .upload-drop-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .badge-req {
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      background: rgba(82, 196, 255, 0.16);
+      color: var(--accent);
+    }
+    .badge-opt {
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      background: rgba(148, 163, 184, 0.16);
+      color: var(--muted);
+    }
+    .file-input-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .file-pick-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 4px;
+    }
+    .file-status {
+      font-size: 12px;
+      color: var(--muted);
+      word-break: break-all;
+    }
+    .file-status.ready { color: var(--ok); }
     [hidden] { display: none !important; }
   </style>
 </head>
@@ -452,24 +518,60 @@ export function renderAdminHtml(): string {
           <div id="npc-pet-picker" hidden>
             <label>选择 Codex V2 桌宠</label>
             <div id="pet-grid" class="pet-grid"></div>
-            <div class="upload-box">
-              <span class="muted">或直接上传本地桌宠（.webp / .png + 可选 pet.json）：</span>
-              <input id="up-id" type="text" placeholder="petId (如 pikachu)" style="width:140px" />
-              <input id="up-name" type="text" placeholder="显示名称" style="width:140px" />
-              <input id="up-sprite" type="file" accept=".webp,.png,image/webp,image/png" />
-              <input id="up-json" type="file" accept=".json,application/json" title="可选 pet.json" />
-              <button class="btn btn-sm" id="up-btn" type="button">上传桌宠</button>
+            <div class="upload-panel">
+              <div class="upload-panel-title">📤 上传 / 导入自定义 Codex V2 桌宠</div>
+              <div class="row" style="margin-bottom:12px">
+                <div>
+                  <label for="up-id">桌宠 ID（英文/数字，留空自动用图片文件名）</label>
+                  <input id="up-id" type="text" placeholder="例如：my-pikachu" maxlength="48" />
+                </div>
+                <div>
+                  <label for="up-name">显示名称（可选，展示在列表与角色名）</label>
+                  <input id="up-name" type="text" placeholder="例如：我的皮卡丘" maxlength="48" />
+                </div>
+              </div>
+              <div class="upload-drops">
+                <div class="upload-drop required">
+                  <div class="upload-drop-head">
+                    <span>🖼️ 1. 精灵图集图片</span>
+                    <span class="badge-req">必填</span>
+                  </div>
+                  <div class="muted" style="font-size:12px">上传 <code>.webp</code> 或 <code>.png</code> 格式的动作精灵图（spritesheet）</div>
+                  <div class="file-pick-row">
+                    <label for="up-sprite" class="btn btn-sm" style="margin:0;color:var(--text)">选择图片文件</label>
+                    <input id="up-sprite" class="file-input-hidden" type="file" accept=".webp,.png,image/webp,image/png" />
+                    <span id="up-sprite-name" class="file-status">未选择文件</span>
+                  </div>
+                </div>
+                <div class="upload-drop">
+                  <div class="upload-drop-head">
+                    <span>⚙️ 2. 动作配置文件 (pet.json)</span>
+                    <span class="badge-opt">可选</span>
+                  </div>
+                  <div class="muted" style="font-size:12px">可不传（默认按标准 Codex V2 网格切帧）；自定义帧尺寸时再上传</div>
+                  <div class="file-pick-row">
+                    <label for="up-json" class="btn btn-sm" style="margin:0;color:var(--text)">选择 pet.json</label>
+                    <input id="up-json" class="file-input-hidden" type="file" accept=".json,application/json" />
+                    <span id="up-json-name" class="file-status">未选择，使用默认配置</span>
+                    <button class="btn btn-sm" id="up-json-clear" type="button" hidden>清除</button>
+                  </div>
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                <button class="btn btn-primary btn-sm" id="up-btn" type="button">⬆️ 上传并导入桌宠</button>
+                <span id="up-msg" class="muted"></span>
+              </div>
             </div>
           </div>
 
           <div id="npc-human-picker" hidden style="margin-bottom:14px;padding:14px;border-radius:12px;background:#0b0f17;border:1px solid var(--border)">
             <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start">
-              <div style="display:flex;flex-direction:column;align-items:center;gap:8px;min-width:130px">
+              <div style="display:flex;flex-direction:column;align-items:center;gap:8px;min-width:160px">
                 <canvas id="npc-human-preview" width="96" height="136" style="image-rendering:pixelated;border-radius:10px;background:#141b2b;border:1px solid var(--border)"></canvas>
                 <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center">
-                  <button class="btn btn-sm btn-primary" id="npc-look-m" type="button">👦 A</button>
-                  <button class="btn btn-sm" id="npc-look-f" type="button">👧 B</button>
-                  <button class="btn btn-sm" id="npc-look-reroll" type="button">🎲 随机</button>
+                  <button class="btn btn-sm btn-primary" id="npc-look-m" type="button">👦 随机男生</button>
+                  <button class="btn btn-sm" id="npc-look-f" type="button">👧 随机女生</button>
+                  <button class="btn btn-sm" id="npc-look-reroll" type="button">🎲 全随机</button>
                 </div>
               </div>
               <div style="flex:1;min-width:260px">
@@ -479,6 +581,13 @@ export function renderAdminHtml(): string {
                     <select id="npc-part-skin"></select>
                   </div>
                   <div>
+                    <label for="npc-part-look">唇色</label>
+                    <select id="npc-part-look">
+                      <option value="m">自然唇色</option>
+                      <option value="f">红润唇色</option>
+                    </select>
+                  </div>
+                  <div>
                     <label for="npc-part-hairStyle">发型</label>
                     <select id="npc-part-hairStyle"></select>
                   </div>
@@ -486,12 +595,12 @@ export function renderAdminHtml(): string {
                     <label for="npc-part-hair">发色</label>
                     <select id="npc-part-hair"></select>
                   </div>
+                </div>
+                <div class="row" style="margin-bottom:10px">
                   <div>
                     <label for="npc-part-facialHair">胡须</label>
                     <select id="npc-part-facialHair"></select>
                   </div>
-                </div>
-                <div class="row" style="margin-bottom:10px">
                   <div>
                     <label for="npc-part-topStyle">上衣款式</label>
                     <select id="npc-part-topStyle"></select>
@@ -504,12 +613,12 @@ export function renderAdminHtml(): string {
                     <label for="npc-part-bottomStyle">裤/裙款式</label>
                     <select id="npc-part-bottomStyle"></select>
                   </div>
+                </div>
+                <div class="row" style="margin-bottom:0">
                   <div>
                     <label for="npc-part-bottom">下装颜色</label>
                     <select id="npc-part-bottom"></select>
                   </div>
-                </div>
-                <div class="row" style="margin-bottom:0">
                   <div>
                     <label for="npc-part-accessory">配饰</label>
                     <select id="npc-part-accessory"></select>
@@ -529,7 +638,7 @@ export function renderAdminHtml(): string {
             <span>⚔️ 允许参加宝可梦决斗（宝可梦默认开启，人类或其他桌宠开启后可作为彩蛋上场对战）</span>
           </label>
           <div>
-            <button class="btn btn-primary" type="submit">➕ 生成 NPC 并加入办公室</button>
+            <button class="btn btn-primary" id="npc-submit-btn" type="submit">➕ 生成 NPC 并加入办公室</button>
           </div>
         </form>
       </div>
@@ -595,7 +704,10 @@ export function renderAdminHtml(): string {
     let selectedPetId = '';
     let selectedPokemonPetId = '';
     let cachedPets = [];
+    let petGridRendered = false;
+    let adminState = { npcs: [], members: [], banned: [] };
     const thumbCache = new Map();
+    const thumbPromiseCache = new Map();
 
     const $ = (id) => document.getElementById(id);
 
@@ -631,7 +743,8 @@ export function renderAdminHtml(): string {
 
     function cropPetThumb(pet) {
       if (thumbCache.has(pet.spriteUrl)) return Promise.resolve(thumbCache.get(pet.spriteUrl));
-      return new Promise((resolve) => {
+      if (thumbPromiseCache.has(pet.spriteUrl)) return thumbPromiseCache.get(pet.spriteUrl);
+      const p = new Promise((resolve) => {
         const img = new Image();
         img.onload = () => {
           try {
@@ -652,10 +765,19 @@ export function renderAdminHtml(): string {
         img.onerror = () => resolve('');
         img.src = pet.spriteUrl;
       });
+      thumbPromiseCache.set(pet.spriteUrl, p);
+      return p;
+    }
+
+    function defaultPetDuelFor(pet) {
+      if (!pet) return false;
+      if (pet.source === 'uploaded' || pet.source === 'local') return false;
+      return pet.id !== 'dafeiyu';
     }
 
     function renderPetGrid(pets) {
       cachedPets = pets;
+      petGridRendered = true;
       const grid = $('pet-grid');
       if (!pets.length) {
         grid.innerHTML = '<div class="muted">暂无可用的 Codex V2 桌宠，可先在下方上传。</div>';
@@ -679,7 +801,7 @@ export function renderAdminHtml(): string {
         btn.addEventListener('click', () => {
           selectedPetId = p.id;
           if (npcMode === 'pet') {
-            $('npc-can-duel').checked = p.id !== 'dafeiyu';
+            $('npc-can-duel').checked = defaultPetDuelFor(p);
           }
           renderPetGrid(cachedPets);
         });
@@ -690,6 +812,87 @@ export function renderAdminHtml(): string {
     function statusPill(st) {
       const map = { working: '工作中', idle: '自由活动', waiting: '等待确认', offline: '已离线' };
       return '<span class="pill ' + esc(st) + '">' + esc(map[st] || st) + '</span>';
+    }
+
+    function duelToggleHtml(item) {
+      return item.canDuel
+        ? '<button class="btn btn-sm" style="border-color:rgba(250,204,21,0.55);color:#fde047" data-duel-toggle="' + esc(item.id) + '" data-duel-next="false">⚔️ 参战中</button>'
+        : '<button class="btn btn-sm" style="opacity:0.78" data-duel-toggle="' + esc(item.id) + '" data-duel-next="true">🍿 仅围观 (点此开启)</button>';
+    }
+
+    function renderNpcs() {
+      const npcs = adminState.npcs || [];
+      $('npc-count').textContent = String(npcs.length);
+      const npcBody = $('npc-tbody');
+      npcBody.innerHTML = npcs.length
+        ? npcs.map((n) => {
+            const lookLabel = n.avatarMode === 'pet' ? ('🐾 ' + esc(n.petId)) : '🧑 像素小人';
+            const modeLabel = n.npcAuto ? '自动劳逸结合' : '固定状态';
+            const codeHint = n.editToken ? (' · 代号: <code>' + esc(n.editToken) + '</code>') : '';
+            const custBtn = n.avatarMode === 'human' && n.editToken
+              ? '<a class="btn btn-sm btn-primary" href="/customize/' + encodeURIComponent(n.editToken) + '" target="_blank">🎨 捏脸设置</a>'
+              : '';
+            return '<tr>' +
+              '<td><strong>' + esc(n.name) + '</strong><div class="muted">' + esc(n.role) + codeHint + '</div></td>' +
+              '<td>' + lookLabel + '</td>' +
+              '<td>' + modeLabel + '</td>' +
+              '<td>' + statusPill(n.lastStatus) + '</td>' +
+              '<td>' + duelToggleHtml(n) + '</td>' +
+              '<td><div class="actions">' +
+                '<button class="btn btn-sm" data-npc-toggle="' + esc(n.id) + '" data-next="' + (n.lastStatus === 'working' ? 'idle' : 'working') + '">' + (n.lastStatus === 'working' ? '去摸鱼' : '去办公') + '</button>' +
+                custBtn +
+                (n.avatarMode === 'human' ? '<button class="btn btn-sm" data-npc-reroll="' + esc(n.id) + '">换个造型</button>' : '') +
+                '<button class="btn btn-sm btn-danger" data-npc-del="' + esc(n.id) + '">删除</button>' +
+              '</div></td>' +
+            '</tr>';
+          }).join('')
+        : '<tr><td colspan="6" class="muted">暂无常驻 NPC</td></tr>';
+    }
+
+    function renderMembers() {
+      const members = adminState.members || [];
+      $('member-count').textContent = String(members.length);
+      const mBody = $('member-tbody');
+      mBody.innerHTML = members.length
+        ? members.map((m) => {
+            const lookLabel = m.avatarMode === 'pet' ? ('🐾 ' + esc(m.petId)) : '🧑 像素小人';
+            const ownerSub = m.ownerId ? (' · 伴随宠物 (所属 ' + esc(m.ownerId) + ')') : '';
+            const codeHint = !m.ownerId && m.editToken ? (' · 代号: <code>' + esc(m.editToken) + '</code>') : '';
+            const custBtn = !m.ownerId && m.editToken
+              ? '<a class="btn btn-sm" href="/customize/' + encodeURIComponent(m.editToken) + '" target="_blank">🎨 捏脸</a>'
+              : '';
+            return '<tr>' +
+              '<td><strong>' + esc(m.name) + '</strong><div class="muted">ID: ' + esc(m.id) + ' · ' + esc(m.role) + ownerSub + codeHint + '</div></td>' +
+              '<td>' + (m.agentTool ? '<span class="pill tool">' + esc(m.agentTool) + '</span>' : '<span class="muted">-</span>') + '</td>' +
+              '<td>' + lookLabel + '</td>' +
+              '<td>' + statusPill(m.lastStatus) + '</td>' +
+              '<td>' + duelToggleHtml(m) + '</td>' +
+              '<td class="muted">' + fmtTime(m.lastSeenAt) + '</td>' +
+              '<td><div class="actions">' +
+                custBtn +
+                '<button class="btn btn-sm btn-warn" data-kick="' + esc(m.id) + '">移出</button>' +
+                '<button class="btn btn-sm btn-danger" data-ban="' + esc(m.id) + '">移出并封禁</button>' +
+              '</div></td>' +
+            '</tr>';
+          }).join('')
+        : '<tr><td colspan="7" class="muted">暂无成员接入</td></tr>';
+    }
+
+    function renderBans() {
+      const bans = adminState.banned || [];
+      $('ban-count').textContent = String(bans.length);
+      const bBody = $('ban-tbody');
+      bBody.innerHTML = bans.length
+        ? bans.map((b) =>
+            '<tr>' +
+              '<td><code>' + esc(b.id) + '</code></td>' +
+              '<td>' + esc(b.name || '-') + '</td>' +
+              '<td class="muted">' + esc(b.reason || '-') + '</td>' +
+              '<td class="muted">' + fmtTime(b.bannedAt) + '</td>' +
+              '<td><button class="btn btn-sm" data-unban="' + esc(b.id) + '">解封</button></td>' +
+            '</tr>'
+          ).join('')
+        : '<tr><td colspan="5" class="muted">封禁名单为空</td></tr>';
     }
 
     async function loadState() {
@@ -708,86 +911,20 @@ export function renderAdminHtml(): string {
       $('opt-bubbles').value = os.bubbles || 'important';
       $('opt-show-names').checked = os.showNames !== false;
 
-      renderPetGrid(data.pets || []);
+      cachedPets = data.pets || [];
+      if (!selectedPetId && cachedPets.length) selectedPetId = cachedPets[0].id;
+      petGridRendered = false;
+      if (npcMode === 'pet') renderPetGrid(cachedPets);
       if (!$('poke-chips').children.length) void searchPokeChips('');
 
-      // NPCs
-      const npcs = data.npcs || [];
-      $('npc-count').textContent = String(npcs.length);
-      const npcBody = $('npc-tbody');
-      npcBody.innerHTML = npcs.length
-        ? npcs.map((n) => {
-            const lookLabel = n.avatarMode === 'pet' ? ('🐾 ' + esc(n.petId)) : '🧑 像素小人';
-            const modeLabel = n.npcAuto ? '自动劳逸结合' : '固定状态';
-            const duelBtn = n.canDuel
-              ? '<button class="btn btn-sm" style="border-color:rgba(250,204,21,0.55);color:#fde047" data-duel-toggle="' + esc(n.id) + '" data-duel-next="false">⚔️ 参战中</button>'
-              : '<button class="btn btn-sm" style="opacity:0.78" data-duel-toggle="' + esc(n.id) + '" data-duel-next="true">🍿 仅围观 (点此开启)</button>';
-            const codeHint = n.editToken ? (' · 代号: <code>' + esc(n.editToken) + '</code>') : '';
-            const custBtn = n.avatarMode === 'human' && n.editToken
-              ? '<a class="btn btn-sm btn-primary" href="/customize/' + encodeURIComponent(n.editToken) + '" target="_blank">🎨 捏脸设置</a>'
-              : '';
-            return '<tr>' +
-              '<td><strong>' + esc(n.name) + '</strong><div class="muted">' + esc(n.role) + codeHint + '</div></td>' +
-              '<td>' + lookLabel + '</td>' +
-              '<td>' + modeLabel + '</td>' +
-              '<td>' + statusPill(n.lastStatus) + '</td>' +
-              '<td>' + duelBtn + '</td>' +
-              '<td><div class="actions">' +
-                '<button class="btn btn-sm" data-npc-toggle="' + esc(n.id) + '" data-next="' + (n.lastStatus === 'working' ? 'idle' : 'working') + '">' + (n.lastStatus === 'working' ? '去摸鱼' : '去办公') + '</button>' +
-                custBtn +
-                (n.avatarMode === 'human' ? '<button class="btn btn-sm" data-npc-reroll="' + esc(n.id) + '">换个造型</button>' : '') +
-                '<button class="btn btn-sm btn-danger" data-npc-del="' + esc(n.id) + '">删除</button>' +
-              '</div></td>' +
-            '</tr>';
-          }).join('')
-        : '<tr><td colspan="6" class="muted">暂无常驻 NPC</td></tr>';
-
-      // Real members
-      const members = data.members || [];
-      $('member-count').textContent = String(members.length);
-      const mBody = $('member-tbody');
-      mBody.innerHTML = members.length
-        ? members.map((m) => {
-            const lookLabel = m.avatarMode === 'pet' ? ('🐾 ' + esc(m.petId)) : '🧑 像素小人';
-            const ownerSub = m.ownerId ? (' · 伴随宠物 (所属 ' + esc(m.ownerId) + ')') : '';
-            const codeHint = !m.ownerId && m.editToken ? (' · 代号: <code>' + esc(m.editToken) + '</code>') : '';
-            const custBtn = !m.ownerId && m.editToken
-              ? '<a class="btn btn-sm" href="/customize/' + encodeURIComponent(m.editToken) + '" target="_blank">🎨 捏脸</a>'
-              : '';
-            const duelBtn = m.canDuel
-              ? '<button class="btn btn-sm" style="border-color:rgba(250,204,21,0.55);color:#fde047" data-duel-toggle="' + esc(m.id) + '" data-duel-next="false">⚔️ 参战中</button>'
-              : '<button class="btn btn-sm" style="opacity:0.78" data-duel-toggle="' + esc(m.id) + '" data-duel-next="true">🍿 仅围观 (点此开启)</button>';
-            return '<tr>' +
-              '<td><strong>' + esc(m.name) + '</strong><div class="muted">ID: ' + esc(m.id) + ' · ' + esc(m.role) + ownerSub + codeHint + '</div></td>' +
-              '<td>' + (m.agentTool ? '<span class="pill tool">' + esc(m.agentTool) + '</span>' : '<span class="muted">-</span>') + '</td>' +
-              '<td>' + lookLabel + '</td>' +
-              '<td>' + statusPill(m.lastStatus) + '</td>' +
-              '<td>' + duelBtn + '</td>' +
-              '<td class="muted">' + fmtTime(m.lastSeenAt) + '</td>' +
-              '<td><div class="actions">' +
-                custBtn +
-                '<button class="btn btn-sm btn-warn" data-kick="' + esc(m.id) + '">移出</button>' +
-                '<button class="btn btn-sm btn-danger" data-ban="' + esc(m.id) + '">移出并封禁</button>' +
-              '</div></td>' +
-            '</tr>';
-          }).join('')
-        : '<tr><td colspan="7" class="muted">暂无成员接入</td></tr>';
-
-      // Bans
-      const bans = data.banned || [];
-      $('ban-count').textContent = String(bans.length);
-      const bBody = $('ban-tbody');
-      bBody.innerHTML = bans.length
-        ? bans.map((b) =>
-            '<tr>' +
-              '<td><code>' + esc(b.id) + '</code></td>' +
-              '<td>' + esc(b.name || '-') + '</td>' +
-              '<td class="muted">' + esc(b.reason || '-') + '</td>' +
-              '<td class="muted">' + fmtTime(b.bannedAt) + '</td>' +
-              '<td><button class="btn btn-sm" data-unban="' + esc(b.id) + '">解封</button></td>' +
-            '</tr>'
-          ).join('')
-        : '<tr><td colspan="5" class="muted">封禁名单为空</td></tr>';
+      adminState = {
+        npcs: data.npcs || [],
+        members: data.members || [],
+        banned: data.banned || [],
+      };
+      renderNpcs();
+      renderMembers();
+      renderBans();
     }
 
     async function searchPokeChips(q = '') {
@@ -903,10 +1040,11 @@ export function renderAdminHtml(): string {
       } catch {}
     }
 
-    function syncNpcHumanControls() {
+    function syncNpcHumanControls(shouldRefreshPreview = true) {
       const tp = npcTopPalette(npcHumanState.parts.topStyle);
       if (!tp.includes(npcHumanState.parts.top)) npcHumanState.parts.top = tp[0];
       fillNpcSelect('npc-part-skin', NPC_CUST.skins, null, npcHumanState.parts.skin, true);
+      if ($('npc-part-look')) $('npc-part-look').value = npcHumanState.look;
       fillNpcSelect('npc-part-hairStyle', NPC_CUST.hairStyles, NPC_CUST.labels.hairStyle, npcHumanState.parts.hairStyle, false);
       fillNpcSelect('npc-part-hair', NPC_CUST.hairColors, null, npcHumanState.parts.hair, true);
       fillNpcSelect('npc-part-facialHair', NPC_CUST.facialHair, NPC_CUST.labels.facialHair, npcHumanState.parts.facialHair, false);
@@ -915,7 +1053,36 @@ export function renderAdminHtml(): string {
       fillNpcSelect('npc-part-bottomStyle', NPC_CUST.bottomStyles, NPC_CUST.labels.bottomStyle, npcHumanState.parts.bottomStyle, false);
       fillNpcSelect('npc-part-bottom', NPC_CUST.bottomColors, null, npcHumanState.parts.bottom, true);
       fillNpcSelect('npc-part-accessory', NPC_CUST.accessories, NPC_CUST.labels.accessory, npcHumanState.parts.accessory, false);
-      void refreshNpcHumanPreview();
+      $('npc-look-m').classList.toggle('btn-primary', npcHumanState.look === 'm');
+      $('npc-look-f').classList.toggle('btn-primary', npcHumanState.look === 'f');
+      if (shouldRefreshPreview) void refreshNpcHumanPreview();
+    }
+
+    function randomizeNpcHuman(preset) {
+      const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+      const look = preset || (Math.random() < 0.5 ? 'm' : 'f');
+      const maleHairs = ['short', 'buzz', 'spiky', 'side_part', 'curly', 'afro', 'mohawk', 'bald'].filter((x) => NPC_CUST.hairStyles.includes(x));
+      const femaleHairs = ['bob', 'long', 'ponytail', 'bun', 'pigtails', 'wavy', 'curly', 'short'].filter((x) => NPC_CUST.hairStyles.includes(x));
+      const maleTops = ['tshirt', 'hoodie', 'shirt_tie', 'sweater', 'jacket', 'polo'].filter((x) => NPC_CUST.topStyles.includes(x));
+      const femaleTops = ['blouse', 'sweater', 'hoodie', 'tshirt', 'jacket', 'polo'].filter((x) => NPC_CUST.topStyles.includes(x));
+      const maleBottoms = ['pants', 'shorts'].filter((x) => NPC_CUST.bottomStyles.includes(x));
+      const femaleBottoms = ['skirt', 'pants', 'shorts'].filter((x) => NPC_CUST.bottomStyles.includes(x));
+      const maleAccs = ['glasses', 'sunglasses', 'headphones', 'cap', 'beanie'].filter((x) => NPC_CUST.accessories.includes(x));
+      const femaleAccs = ['glasses', 'sunglasses', 'headphones', 'beanie', 'earrings', 'bow'].filter((x) => NPC_CUST.accessories.includes(x));
+
+      npcHumanState.look = look;
+      npcHumanState.seed = (Math.floor(Math.random() * 0xffffffff) >>> 0) || 1;
+      npcHumanState.parts.skin = pick(NPC_CUST.skins);
+      npcHumanState.parts.hairStyle = pick(look === 'f' && femaleHairs.length ? femaleHairs : (maleHairs.length ? maleHairs : NPC_CUST.hairStyles));
+      npcHumanState.parts.hair = pick(NPC_CUST.hairColors);
+      npcHumanState.parts.facialHair = look === 'm' && Math.random() < 0.25 ? pick(NPC_CUST.facialHair) : 'none';
+      npcHumanState.parts.topStyle = pick(look === 'f' && femaleTops.length ? femaleTops : (maleTops.length ? maleTops : NPC_CUST.topStyles));
+      npcHumanState.parts.top = pick(npcTopPalette(npcHumanState.parts.topStyle));
+      npcHumanState.parts.bottomStyle = pick(look === 'f' && femaleBottoms.length ? femaleBottoms : (maleBottoms.length ? maleBottoms : NPC_CUST.bottomStyles));
+      npcHumanState.parts.bottom = pick(NPC_CUST.bottomColors);
+      const accPool = look === 'f' && femaleAccs.length ? femaleAccs : (maleAccs.length ? maleAccs : NPC_CUST.accessories);
+      npcHumanState.parts.accessory = Math.random() < 0.5 ? 'none' : pick(accPool);
+      syncNpcHumanControls(npcMode === 'human');
     }
 
     ['skin', 'hairStyle', 'hair', 'facialHair', 'topStyle', 'top', 'bottomStyle', 'bottom', 'accessory'].forEach((key) => {
@@ -932,31 +1099,18 @@ export function renderAdminHtml(): string {
       });
     });
 
-    $('npc-look-m').addEventListener('click', () => {
-      npcHumanState.look = 'm';
-      void refreshNpcHumanPreview();
-    });
-    $('npc-look-f').addEventListener('click', () => {
-      npcHumanState.look = 'f';
-      void refreshNpcHumanPreview();
-    });
-    $('npc-look-reroll').addEventListener('click', () => {
-      const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-      npcHumanState.look = Math.random() < 0.5 ? 'm' : 'f';
-      npcHumanState.seed = (Math.floor(Math.random() * 0xffffffff) >>> 0) || 1;
-      npcHumanState.parts.skin = pick(NPC_CUST.skins);
-      npcHumanState.parts.hairStyle = pick(NPC_CUST.hairStyles);
-      npcHumanState.parts.hair = pick(NPC_CUST.hairColors);
-      npcHumanState.parts.facialHair = npcHumanState.look === 'm' && Math.random() < 0.25 ? pick(NPC_CUST.facialHair) : 'none';
-      npcHumanState.parts.topStyle = pick(NPC_CUST.topStyles);
-      npcHumanState.parts.top = pick(npcTopPalette(npcHumanState.parts.topStyle));
-      npcHumanState.parts.bottomStyle = pick(NPC_CUST.bottomStyles);
-      npcHumanState.parts.bottom = pick(NPC_CUST.bottomColors);
-      npcHumanState.parts.accessory = Math.random() < 0.5 ? 'none' : pick(NPC_CUST.accessories);
-      syncNpcHumanControls();
-    });
+    if ($('npc-part-look')) {
+      $('npc-part-look').addEventListener('change', () => {
+        npcHumanState.look = $('npc-part-look').value === 'f' ? 'f' : 'm';
+        void refreshNpcHumanPreview();
+      });
+    }
 
-    syncNpcHumanControls();
+    $('npc-look-m').addEventListener('click', () => randomizeNpcHuman('m'));
+    $('npc-look-f').addEventListener('click', () => randomizeNpcHuman('f'));
+    $('npc-look-reroll').addEventListener('click', () => randomizeNpcHuman());
+
+    syncNpcHumanControls(false);
 
     document.querySelectorAll('.tab').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -965,13 +1119,15 @@ export function renderAdminHtml(): string {
         $('npc-pokemon-picker').hidden = npcMode !== 'pokemon';
         $('npc-pet-picker').hidden = npcMode !== 'pet';
         $('npc-human-picker').hidden = npcMode !== 'human';
+        if (npcMode === 'pet' && !petGridRendered) renderPetGrid(cachedPets);
         if (npcMode === 'human') void refreshNpcHumanPreview();
         if (npcMode === 'pokemon') {
           $('npc-can-duel').checked = true;
         } else if (npcMode === 'human') {
           $('npc-can-duel').checked = false;
         } else {
-          $('npc-can-duel').checked = selectedPetId !== 'dafeiyu';
+          const curPet = cachedPets.find((p) => p.id === selectedPetId);
+          $('npc-can-duel').checked = defaultPetDuelFor(curPet);
         }
       });
     });
@@ -994,7 +1150,19 @@ export function renderAdminHtml(): string {
       showLogin();
     });
 
-    $('refresh-btn').addEventListener('click', () => void loadState());
+    $('refresh-btn').addEventListener('click', async () => {
+      const btn = $('refresh-btn');
+      btn.disabled = true;
+      btn.textContent = '🔄 刷新中…';
+      try {
+        await loadState();
+      } catch (e) {
+        alert(e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '🔄 刷新';
+      }
+    });
 
     async function savePublicUrl(urlValue) {
       const msgEl = $('settings-msg');
@@ -1108,13 +1276,48 @@ export function renderAdminHtml(): string {
       });
     });
 
+    function updateFilePickLabels() {
+      const sprite = $('up-sprite').files && $('up-sprite').files[0];
+      const spriteLabel = $('up-sprite-name');
+      if (sprite) {
+        const kb = Math.max(1, Math.round(sprite.size / 1024));
+        spriteLabel.textContent = sprite.name + ' (' + kb + ' KB)';
+        spriteLabel.classList.add('ready');
+      } else {
+        spriteLabel.textContent = '未选择文件';
+        spriteLabel.classList.remove('ready');
+      }
+      const jf = $('up-json').files && $('up-json').files[0];
+      const jsonLabel = $('up-json-name');
+      const clearBtn = $('up-json-clear');
+      if (jf) {
+        jsonLabel.textContent = jf.name;
+        jsonLabel.classList.add('ready');
+        clearBtn.hidden = false;
+      } else {
+        jsonLabel.textContent = '未选择，使用默认配置';
+        jsonLabel.classList.remove('ready');
+        clearBtn.hidden = true;
+      }
+    }
+
+    $('up-sprite').addEventListener('change', updateFilePickLabels);
+    $('up-json').addEventListener('change', updateFilePickLabels);
+    $('up-json-clear').addEventListener('click', () => {
+      $('up-json').value = '';
+      updateFilePickLabels();
+    });
+
     $('up-btn').addEventListener('click', async () => {
+      const btn = $('up-btn');
+      const upMsg = $('up-msg');
       const sprite = $('up-sprite').files[0];
       const petId = ($('up-id').value.trim() || (sprite ? sprite.name.replace(/\\.[^.]+$/, '') : '')).toLowerCase().replace(/[^a-z0-9_-]/g, '-');
       const errEl = $('npc-err');
       errEl.hidden = true;
+      upMsg.textContent = '';
       if (!sprite || !petId) {
-        errEl.textContent = '请填写 petId 并选择 spritesheet (.webp/.png) 文件。';
+        errEl.textContent = '请填写桌宠 ID 并选择精灵图集图片 (.webp / .png)。';
         errEl.hidden = false;
         return;
       }
@@ -1124,19 +1327,32 @@ export function renderAdminHtml(): string {
       fd.append('sprite', sprite);
       const jsonFile = $('up-json').files[0];
       if (jsonFile) fd.append('petJson', jsonFile);
+      btn.disabled = true;
+      btn.textContent = '上传中…';
       try {
         const res = await fetch('/api/pets/upload', { method: 'POST', body: fd });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || '上传失败');
         selectedPetId = data.pet.id;
+        const idx = cachedPets.findIndex((p) => p.id === data.pet.id);
+        if (idx >= 0) cachedPets[idx] = data.pet;
+        else cachedPets.push(data.pet);
+        cachedPets.sort((a, b) => (a.displayName || a.id).localeCompare(b.displayName || b.id, 'zh-CN'));
         $('up-id').value = '';
         $('up-name').value = '';
         $('up-sprite').value = '';
         $('up-json').value = '';
-        await loadState();
+        updateFilePickLabels();
+        renderPetGrid(cachedPets);
+        if (npcMode === 'pet') $('npc-can-duel').checked = defaultPetDuelFor(data.pet);
+        upMsg.style.color = 'var(--ok)';
+        upMsg.textContent = '✅ 已导入「' + (data.pet.displayName || data.pet.id) + '」并选中';
       } catch (e) {
         errEl.textContent = e.message;
         errEl.hidden = false;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '⬆️ 上传并导入桌宠';
       }
     });
 
@@ -1144,6 +1360,7 @@ export function renderAdminHtml(): string {
       ev.preventDefault();
       const errEl = $('npc-err');
       const createdEl = $('npc-created-msg');
+      const submitBtn = $('npc-submit-btn');
       errEl.hidden = true;
       if (createdEl) createdEl.hidden = true;
       const beh = $('npc-behavior').value;
@@ -1166,6 +1383,8 @@ export function renderAdminHtml(): string {
         status: beh === 'working' ? 'working' : 'idle',
         npcAuto: beh === 'auto',
       };
+      submitBtn.disabled = true;
+      submitBtn.textContent = '生成中…';
       try {
         const res = await api('/api/admin/npcs', {
           method: 'POST',
@@ -1173,60 +1392,164 @@ export function renderAdminHtml(): string {
           body: JSON.stringify(body),
         });
         $('npc-name').value = '';
+        if (res && res.npc) {
+          adminState.npcs.unshift(res.npc);
+          renderNpcs();
+        }
         if (createdEl && res && res.npc && res.npc.editToken) {
           const code = res.npc.editToken;
           createdEl.hidden = false;
           createdEl.style.color = 'var(--ok)';
           createdEl.innerHTML = '✅ 已创建 <strong>' + esc(res.npc.name) + '</strong> · 专属代号: <code>' + esc(code) + '</code> · <a href="/customize/' + encodeURIComponent(code) + '" target="_blank" style="color:var(--accent)">打开专属捏脸页面 🎨</a>';
         }
-        await loadState();
       } catch (e) {
         errEl.textContent = e.message;
         errEl.hidden = false;
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = '➕ 生成 NPC 并加入办公室';
       }
     });
 
     document.addEventListener('click', async (ev) => {
       const btn = ev.target.closest('button');
-      if (!btn) return;
+      if (!btn || btn.disabled) return;
       try {
         if (btn.dataset.duelToggle) {
-          await api('/api/admin/members/' + encodeURIComponent(btn.dataset.duelToggle) + '/duel', {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ canDuel: btn.dataset.duelNext === 'true' }),
-          });
-          await loadState();
+          const id = btn.dataset.duelToggle;
+          const next = btn.dataset.duelNext === 'true';
+          const target = adminState.npcs.find((n) => n.id === id) || adminState.members.find((m) => m.id === id);
+          const prevVal = target ? !!target.canDuel : !next;
+          if (target) target.canDuel = next;
+          btn.disabled = true;
+          btn.style.borderColor = next ? 'rgba(250,204,21,0.55)' : '';
+          btn.style.color = next ? '#fde047' : '';
+          btn.style.opacity = next ? '' : '0.78';
+          btn.textContent = next ? '⚔️ 参战中' : '🍿 仅围观 (点此开启)';
+          btn.dataset.duelNext = next ? 'false' : 'true';
+          try {
+            const r = await api('/api/admin/members/' + encodeURIComponent(id) + '/duel', {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ canDuel: next }),
+            });
+            if (target && typeof r.canDuel === 'boolean') target.canDuel = r.canDuel;
+          } catch (err) {
+            if (target) target.canDuel = prevVal;
+            renderNpcs();
+            renderMembers();
+            throw err;
+          } finally {
+            btn.disabled = false;
+          }
         } else if (btn.dataset.kick) {
-          await api('/api/admin/members/' + encodeURIComponent(btn.dataset.kick) + '/kick', { method: 'POST' });
-          await loadState();
+          const id = btn.dataset.kick;
+          const orig = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = '移出中…';
+          try {
+            const res = await api('/api/admin/members/' + encodeURIComponent(id) + '/kick', { method: 'POST' });
+            adminState = { npcs: res.npcs || [], members: res.members || [], banned: res.banned || [] };
+            renderNpcs();
+            renderMembers();
+            renderBans();
+          } catch (err) {
+            btn.disabled = false;
+            btn.textContent = orig;
+            throw err;
+          }
         } else if (btn.dataset.ban) {
-          await api('/api/admin/members/' + encodeURIComponent(btn.dataset.ban) + '/ban', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ reason: '管理员移出并封禁' }),
-          });
-          await loadState();
+          const id = btn.dataset.ban;
+          const orig = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = '处理中…';
+          try {
+            const res = await api('/api/admin/members/' + encodeURIComponent(id) + '/ban', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ reason: '管理员移出并封禁' }),
+            });
+            adminState = { npcs: res.npcs || [], members: res.members || [], banned: res.banned || [] };
+            renderNpcs();
+            renderMembers();
+            renderBans();
+          } catch (err) {
+            btn.disabled = false;
+            btn.textContent = orig;
+            throw err;
+          }
         } else if (btn.dataset.unban) {
-          await api('/api/admin/bans/' + encodeURIComponent(btn.dataset.unban), { method: 'DELETE' });
-          await loadState();
+          const id = btn.dataset.unban;
+          const orig = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = '解封中…';
+          try {
+            const res = await api('/api/admin/bans/' + encodeURIComponent(id), { method: 'DELETE' });
+            adminState = { npcs: res.npcs || [], members: res.members || [], banned: res.banned || [] };
+            renderNpcs();
+            renderMembers();
+            renderBans();
+          } catch (err) {
+            btn.disabled = false;
+            btn.textContent = orig;
+            throw err;
+          }
         } else if (btn.dataset.npcDel) {
-          await api('/api/admin/npcs/' + encodeURIComponent(btn.dataset.npcDel), { method: 'DELETE' });
-          await loadState();
+          const id = btn.dataset.npcDel;
+          const orig = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = '删除中…';
+          try {
+            await api('/api/admin/npcs/' + encodeURIComponent(id), { method: 'DELETE' });
+            adminState.npcs = adminState.npcs.filter((n) => n.id !== id);
+            renderNpcs();
+          } catch (err) {
+            btn.disabled = false;
+            btn.textContent = orig;
+            throw err;
+          }
         } else if (btn.dataset.npcToggle) {
-          await api('/api/admin/npcs/' + encodeURIComponent(btn.dataset.npcToggle), {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status: btn.dataset.next, npcAuto: false }),
-          });
-          await loadState();
+          const id = btn.dataset.npcToggle;
+          const orig = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = '切换中…';
+          try {
+            const res = await api('/api/admin/npcs/' + encodeURIComponent(id), {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ status: btn.dataset.next, npcAuto: false }),
+            });
+            if (res && res.npc) {
+              const idx = adminState.npcs.findIndex((n) => n.id === id);
+              if (idx >= 0) adminState.npcs[idx] = res.npc;
+              renderNpcs();
+            }
+          } catch (err) {
+            btn.disabled = false;
+            btn.textContent = orig;
+            throw err;
+          }
         } else if (btn.dataset.npcReroll) {
-          await api('/api/admin/npcs/' + encodeURIComponent(btn.dataset.npcReroll), {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ reroll: true }),
-          });
-          await loadState();
+          const id = btn.dataset.npcReroll;
+          const orig = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = '更换中…';
+          try {
+            const res = await api('/api/admin/npcs/' + encodeURIComponent(id), {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ reroll: true }),
+            });
+            if (res && res.npc) {
+              const idx = adminState.npcs.findIndex((n) => n.id === id);
+              if (idx >= 0) adminState.npcs[idx] = res.npc;
+              renderNpcs();
+            }
+          } catch (err) {
+            btn.disabled = false;
+            btn.textContent = orig;
+            throw err;
+          }
         }
       } catch (e) {
         alert(e.message);

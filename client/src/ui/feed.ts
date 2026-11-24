@@ -13,7 +13,7 @@ import { tr } from '../../../shared/i18n';
 
 const VISIBLE = 50;
 
-type AgentMeta = Pick<AgentInfo, 'seed' | 'look' | 'kind' | 'account' | 'parts'>;
+type AgentMeta = Pick<AgentInfo, 'seed' | 'look' | 'kind' | 'account' | 'parts' | 'pet'>;
 
 export class FeedPanel implements UiComponent {
   readonly el: HTMLElement;
@@ -93,8 +93,8 @@ export class FeedPanel implements UiComponent {
   render(): void {
     for (const a of this.ctx.store.snapshot?.agents ?? []) {
       const m = this.meta.get(a.id);
-      if (!m || m.seed !== a.seed || m.account !== a.account || partsKey(m.parts) !== partsKey(a.parts)) {
-        this.meta.set(a.id, { seed: a.seed, look: a.look, kind: a.kind, account: a.account, parts: a.parts });
+      if (!m || m.seed !== a.seed || m.account !== a.account || partsKey(m.parts) !== partsKey(a.parts) || m.pet?.spriteUrl !== a.pet?.spriteUrl) {
+        this.meta.set(a.id, { seed: a.seed, look: a.look, kind: a.kind, account: a.account, parts: a.parts, ...(a.pet ? { pet: a.pet } : {}) });
       }
     }
     const open = this.ctx.isPanelOpen('feed');
@@ -220,8 +220,9 @@ export class FeedPanel implements UiComponent {
     if (m) updateAvatar(avatar, m, 'xs');
     setText(who, f.agentName);
     const acc = this.accountOf(f);
-    updateAccountChip(chip, acc ? this.ctx.account(acc) : undefined, acc ?? '');
-    setHidden(chip, !acc);
+    const accObj = acc ? this.ctx.account(acc) : undefined;
+    updateAccountChip(chip, accObj, acc ?? '');
+    setHidden(chip, !acc || !accObj);
     setText(room, f.roomName);
     setText(icon, f.activity.icon);
     setText(text, f.activity.text);
@@ -233,13 +234,13 @@ export class FeedPanel implements UiComponent {
     li.classList.toggle('is-shell-fail', done === 'fail');
     const present = !!this.ctx.agent(f.agentId);
     li.classList.toggle('is-gone', !present);
-    setTitle(btn, `${formatClock(f.activity.at)} · ${f.agentName} em ${f.roomName}\n${f.activity.text}${f.activity.detail ? `\n${f.activity.detail}` : ''}`);
+    setTitle(btn, `${formatClock(f.activity.at)} · ${f.agentName} · ${f.roomName}\n${f.activity.text}${f.activity.detail ? `\n${f.activity.detail}` : ''}`);
   }
 
   private metaFromStore(id: string): AgentMeta | undefined {
     const a = this.ctx.agent(id);
     if (!a) return undefined;
-    const m = { seed: a.seed, look: a.look, kind: a.kind, account: a.account, parts: a.parts };
+    const m: AgentMeta = { seed: a.seed, look: a.look, kind: a.kind, account: a.account, parts: a.parts, ...(a.pet ? { pet: a.pet } : {}) };
     this.meta.set(id, m);
     return m;
   }

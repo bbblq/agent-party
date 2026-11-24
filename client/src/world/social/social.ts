@@ -91,6 +91,8 @@ export class Social {
   private seq = 1;
   private eventSeq = 0;
   private nextSaveAt = 0;
+  private lastSoloEventAt = new Map<string, number>();
+  private lastLeisureEventAt = 0;
   private syncedTv: { mode: 'show' | 'game'; seed: number } | null = null;
   private syncedArcade: number | null = null;
 
@@ -822,6 +824,50 @@ export class Social {
         g.nextAt = now + 600;
         break;
     }
+    this.emitGatheringStart(g, now);
+  }
+
+  private emitGatheringStart(g: Gathering, now: number): void {
+    if (this.sim.synced || this.sim.visit || g.kind === 'mirror') return;
+    const act = active(g);
+    const lead = this.charOf(act[0]);
+    if (!lead) return;
+    const other = act.length >= 2 ? this.charOf(act[1])?.info.name : undefined;
+    switch (g.kind) {
+      case 'pingpong':
+        this.event(g, '🏓', lead.id, other ? `和 ${other} 打起了乒乓球` : '去打乒乓球了', now);
+        break;
+      case 'videogame':
+        this.event(g, '🎮', lead.id, other ? `和 ${other} 联机打起了游戏` : '玩起了主机游戏', now);
+        break;
+      case 'arcade':
+        this.event(g, '🕹️', lead.id, other ? `和 ${other} 在街机前切磋起来了` : '玩起了街机', now);
+        break;
+      case 'tv':
+        this.event(g, '📺', lead.id, other ? `和 ${other} 一起看起了电视` : '在沙发上看起了电视', now);
+        break;
+      case 'kitchen':
+        this.event(g, '☕', lead.id, other ? `和 ${other} 在茶水间边喝咖啡边聊天` : '在茶水间歇了会儿', now);
+        break;
+      case 'talk':
+        this.event(g, '💬', lead.id, other ? `和 ${other} 聊起了天` : '闲聊中', now);
+        break;
+      case 'rps':
+        this.event(g, '✊', lead.id, other ? `和 ${other} 玩起了猜拳` : '玩起了猜拳', now);
+        break;
+    }
+  }
+
+  pushLeisureEvent(ch: Character, icon: string, text: string, areaId: string, now: number): void {
+    if (this.sim.synced || this.sim.visit) return;
+    if (now - this.lastLeisureEventAt < 8_000) return;
+    const prev = this.lastSoloEventAt.get(ch.id) ?? 0;
+    if (now - prev < 45_000) return;
+    this.lastLeisureEventAt = now;
+    this.lastSoloEventAt.set(ch.id, now);
+    if (this.events.length >= MAX_EVENTS) this.events.shift();
+    const place = PLACES[areaId] ?? this.sim.rooms.get(areaId)?.info.name ?? tr('Escritório');
+    this.events.push({ id: `social:leisure:${++this.eventSeq}`, at: now, icon, agentId: ch.id, text, place });
   }
 
   /** Pose de base de cada um enquanto a roda rola. */

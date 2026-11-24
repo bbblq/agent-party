@@ -130,6 +130,50 @@ export function drawArenaFloor(
   ctx.restore();
 }
 
+/** 门口左侧墙上的上届冠军荣耀牌匾（世界坐标，绘于墙面之上，与右侧倒计时电视对称）。 */
+export function drawArenaChampionPlaque(
+  ctx: CanvasRenderingContext2D,
+  rect: TileRect,
+  _state: SyncedArenaState,
+  _now: number,
+): void {
+  const ox = rect.x * TILE;
+  const oy = rect.y * TILE;
+  const x = Math.round(ox + 1.35 * TILE);
+  const y = Math.round(oy + 0.22 * TILE);
+  const w = 64;
+  const h = 24;
+
+  ctx.save();
+  // 墙面投影
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.32)';
+  ctx.fillRect(x + 1, y + 2, w, h);
+
+  // 牌匾暗蓝金属底板 + 金色边框
+  ctx.fillStyle = '#1b2436';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = '#d4af4f';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+
+  // 内框深色底面
+  ctx.fillStyle = '#0f1829';
+  ctx.fillRect(x + 2, y + 2, w - 4, h - 4);
+
+  // 顶部金色细线装饰
+  ctx.fillStyle = 'rgba(250, 204, 21, 0.32)';
+  ctx.fillRect(x + 3, y + 2, w - 6, 1);
+
+  // 四角金色铆钉
+  ctx.fillStyle = '#facc15';
+  ctx.fillRect(x + 2.5, y + 2.5, 1.5, 1.5);
+  ctx.fillRect(x + w - 4, y + 2.5, 1.5, 1.5);
+  ctx.fillRect(x + 2.5, y + h - 4, 1.5, 1.5);
+  ctx.fillRect(x + w - 4, y + h - 4, 1.5, 1.5);
+
+  ctx.restore();
+}
+
 /** 门口右侧墙上的挂壁倒计时电视机（世界坐标，绘于墙面之上）。 */
 export function drawArenaWallTv(
   ctx: CanvasRenderingContext2D,
@@ -347,10 +391,10 @@ export function drawArenaOverlay(
   const sy = (wy: number) => wy * k + oy;
 
   const st = sim.arena.state;
-  // 留出右侧挂壁倒计时电视（11.05..14.3 格）空间，将顶部对决牌居中在左侧至大门上方（5.6 格处）
-  const centerX = sx((r.x + 5.65) * TILE);
+  // 顶部对决牌水平居中于宽大门洞（1.35..5.35 为左墙冠军牌，11.05..14.3 为右墙倒计时电视）
+  const centerX = sx((r.x + 8.0) * TILE);
   const maxBannerW = Math.max(96, Math.round(9.6 * TILE * k));
-  const topY = sy((r.y + 1.05) * TILE);
+  const topY = sy((r.y + (st.phase === 'idle' ? 0.95 : 2.35)) * TILE);
 
   if (centerX < -240 || centerX > camera.viewW + 240 || topY < -80 || topY > camera.viewH + 120) {
     return;
@@ -469,6 +513,56 @@ export function drawArenaOverlay(
     }
   }
 
+  // ---- 门口左侧墙上「上届冠军」牌匾文字
+  const plaqueLeft = sx(r.x * TILE + 1.35 * TILE + 2);
+  const plaqueTop = sy(r.y * TILE + 0.22 * TILE + 2);
+  const plaqueW = 60 * k;
+  const plaqueH = 20 * k;
+  if (plaqueW >= 28 && plaqueH >= 10) {
+    const plaqueCx = plaqueLeft + plaqueW / 2;
+    const header = plaqueW >= 54 ? '🏆 上届冠军' : '🏆 上届';
+    const headerFont = Math.max(7.5, Math.min(10, Math.round(plaqueH * 0.26)));
+    ctx.textAlign = 'center';
+
+    if (st.prevChampion) {
+      const score = `${st.prevChampion.wins}胜${st.prevChampion.losses}负`;
+      if (plaqueH >= 24) {
+        const nameFont = Math.max(8, Math.min(11.5, Math.round(plaqueH * 0.30)));
+        const scoreFont = Math.max(7.5, Math.min(10.5, Math.round(plaqueH * 0.25)));
+        ctx.font = `700 ${headerFont}px ${UI_FONT}`;
+        ctx.fillStyle = '#fde047';
+        ctx.fillText(header, plaqueCx, plaqueTop + plaqueH * 0.20, plaqueW - 4);
+
+        ctx.font = `700 ${nameFont}px ${UI_FONT}`;
+        ctx.fillStyle = '#f8fafc';
+        ctx.fillText(st.prevChampion.name, plaqueCx, plaqueTop + plaqueH * 0.52, plaqueW - 4);
+
+        ctx.font = `700 ${scoreFont}px ${UI_FONT}`;
+        ctx.fillStyle = '#86efac';
+        ctx.fillText(score, plaqueCx, plaqueTop + plaqueH * 0.82, plaqueW - 4);
+      } else {
+        const bodyFont = Math.max(8, Math.min(11, Math.round(plaqueH * 0.34)));
+        ctx.font = `700 ${headerFont}px ${UI_FONT}`;
+        ctx.fillStyle = '#fde047';
+        ctx.fillText(header, plaqueCx, plaqueTop + plaqueH * 0.30, plaqueW - 4);
+
+        ctx.font = `700 ${bodyFont}px ${UI_FONT}`;
+        ctx.fillStyle = '#f8fafc';
+        ctx.fillText(`${st.prevChampion.name} ${score}`, plaqueCx, plaqueTop + plaqueH * 0.72, plaqueW - 4);
+      }
+    } else {
+      const bodyFont = Math.max(8, Math.min(11, Math.round(plaqueH * 0.32)));
+      ctx.font = `700 ${headerFont}px ${UI_FONT}`;
+      ctx.fillStyle = '#fde047';
+      ctx.fillText(header, plaqueCx, plaqueTop + plaqueH * 0.30, plaqueW - 4);
+
+      ctx.font = `600 ${bodyFont}px ${UI_FONT}`;
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillText('虚位以待', plaqueCx, plaqueTop + plaqueH * 0.72, plaqueW - 4);
+    }
+    reserve?.(plaqueLeft - 2, plaqueTop - 2, plaqueW + 4, plaqueH + 4);
+  }
+
   // ---- 门口右侧墙上电视机屏幕文字（下场比赛倒计时 秒）
   const tvLeft = sx(r.x * TILE + 11.05 * TILE + 2);
   const tvTop = sy(r.y * TILE + 0.22 * TILE + 2);
@@ -481,11 +575,17 @@ export function drawArenaOverlay(
     let line2Color = '#86efac';
 
     if (st.phase === 'idle') {
-      if (st.nextDuelAt && st.nextDuelAt > now) {
-        const sec = Math.max(0, Math.ceil((st.nextDuelAt - now) / 1000));
-        line1 = tvW >= 54 ? '下场倒计时' : '下场';
-        line2 = tvW >= 42 ? `${sec} 秒` : `${sec}s`;
-        line2Color = sec <= 10 ? '#fde047' : '#4ade80';
+      if (st.nextDuelAt && st.nextDuelAt > 0) {
+        if (st.nextDuelAt > now) {
+          const sec = Math.max(0, Math.ceil((st.nextDuelAt - now) / 1000));
+          line1 = tvW >= 54 ? '下场倒计时' : '下场';
+          line2 = tvW >= 42 ? `${sec} 秒` : `${sec}s`;
+          line2Color = sec <= 10 ? '#fde047' : '#4ade80';
+        } else {
+          line1 = tvW >= 54 ? '即将开赛' : '开赛';
+          line2 = tvW >= 42 ? '0 秒' : '0s';
+          line2Color = '#fde047';
+        }
       } else {
         line1 = tvW >= 54 ? '等待宝可梦' : '待机';
         line2 = tvW >= 48 ? '需≥2只参赛' : '等选手';

@@ -861,6 +861,15 @@ export interface ArenaLeaderboardEntry {
   losses: number;
 }
 
+export interface ArenaChampionRecord {
+  id: string;
+  name: string;
+  wins: number;
+  losses: number;
+  /** 上届所属的北京时间整点桶（beijingHourBucket） */
+  hourBucket: number;
+}
+
 export interface SyncedArenaState {
   phase: 'idle' | 'gather' | 'fight' | 'finish';
   matchId: number;
@@ -879,6 +888,7 @@ export interface SyncedArenaState {
   watchers: string[];
   fx?: SyncedArenaFx;
   leaderboard: ArenaLeaderboardEntry[];
+  prevChampion?: ArenaChampionRecord | null;
 }
 
 export interface SyncedArenaEvent {

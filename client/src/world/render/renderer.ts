@@ -16,7 +16,7 @@ import type { RoomState } from '../sim/room-state';
 import { cobwebScale, hourglassIcon, HOURGLASS_FLIP_MS, STORM_LIFT } from '../sim/shell';
 import type { Sim } from '../sim/sim';
 import { buildAnim, furnitureScale, NO_ANIM, sweepDelay, type BuildAnim } from './anim';
-import { drawArenaEffects, drawArenaFloor, drawArenaWallTv, type ArenaFxTracker } from './arena-render';
+import { drawArenaChampionPlaque, drawArenaEffects, drawArenaFloor, drawArenaWallTv, type ArenaFxTracker } from './arena-render';
 import { daylightModeOf, parseHourParam } from './daylight';
 import { RoomFxRenderer } from './github-fx';
 import { Lighting } from './lighting';
@@ -409,6 +409,7 @@ export class Renderer {
     if (arenaArea) {
       const ar = arenaArea.rect;
       if (visible(ar.x * TILE, ar.y * TILE, ar.w * TILE, ar.h * TILE)) {
+        drawArenaChampionPlaque(ctx, ar, this.sim.arena.state, now);
         drawArenaWallTv(ctx, ar, this.sim.arena.state, now);
       }
     }

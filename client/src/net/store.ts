@@ -111,6 +111,7 @@ export class OfficeStore {
   snapshot: OfficeSnapshot | null = null;
   lastWorldFrame: WorldSyncFrame | null = null;
   lastArenaEvent: SyncedArenaEvent | null = null;
+  lastArenaReceivedAt = 0;
   /** Feed global, do mais antigo para o mais recente. */
   feed: FeedItem[] = [];
   connection: ConnectionState = 'connecting';
@@ -131,7 +132,7 @@ export class OfficeStore {
   private retryAt: number | null = null;
   /** Desligado de propósito (disconnect()): não reconecta sozinho. */
   private stopped = true;
-  private syncingServer: Promise<WorldSyncFrame | null> | null = null;
+  private syncingArena: Promise<SyncedArenaEvent | null> | null = null;
   private readonly onOnline = () => {
     if (!this.stopped && this.connection === 'closed') this.reconnectNow();
   };
@@ -198,36 +199,30 @@ export class OfficeStore {
     this.startSSE();
   }
 
-  /** 强制向服务端拉取最新 snapshot 与 world 权威位置（开赛前 5 秒校准）。 */
-  async forceSyncWithServer(): Promise<WorldSyncFrame | null> {
+  /** 轻量向服务端拉取最新决斗场状态与实时时间戳（用于切回标签页后恢复倒计时）。 */
+  async syncArenaWithServer(): Promise<SyncedArenaEvent | null> {
     if (this.mock || this.replay) return null;
-    if (this.syncingServer) return this.syncingServer;
+    if (this.syncingArena) return this.syncingArena;
     const run = (async () => {
       try {
-        const [snapRes, worldRes] = await Promise.all([
-          fetch('/api/snapshot', { cache: 'no-store' }),
-          fetch('/api/world', { cache: 'no-store' }),
-        ]);
-        if (snapRes.ok) {
-          const snap = (await snapRes.json()) as OfficeSnapshot;
-          if (snap && Array.isArray(snap.agents)) this.applySnapshot(snap);
-        }
-        if (worldRes.ok) {
-          const frame = (await worldRes.json()) as WorldSyncFrame;
-          if (frame && Array.isArray(frame.chars)) {
-            this.lastWorldFrame = frame;
-            this.emit('world', frame);
-            return frame;
+        const res = await fetch('/api/arena', { cache: 'no-store' });
+        if (res.ok) {
+          const data = (await res.json()) as SyncedArenaEvent;
+          if (data && data.arena) {
+            this.lastArenaEvent = data;
+            this.lastArenaReceivedAt = Date.now();
+            this.emit('arena', data);
+            return data;
           }
         }
       } catch (err) {
-        console.warn('[store] pre-duel forceSyncWithServer failed', err);
+        console.warn('[store] syncArenaWithServer failed', err);
       }
       return null;
     })().finally(() => {
-      this.syncingServer = null;
+      this.syncingArena = null;
     });
-    this.syncingServer = run;
+    this.syncingArena = run;
     return run;
   }
 
@@ -630,6 +625,7 @@ export class OfficeStore {
       const data = this.parse<SyncedArenaEvent>(ev, 'arena');
       if (data) {
         this.lastArenaEvent = data;
+        this.lastArenaReceivedAt = Date.now();
         this.emit('arena', data);
       }
     });
