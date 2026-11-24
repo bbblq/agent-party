@@ -2109,6 +2109,9 @@ export class Sim {
       ch.stepT = 0;
       if (ch.mode === 'work' || ch.mode === 'wait' || ch.mode === 'idle' || ch.mode === 'shell') {
         ch.reactUntil = 0;
+        if (this.arena.isBusy(ch.id) && this.arena.state.phase !== 'idle') {
+          continue;
+        }
         this.assignHome(ch);
         const home = this.spots.get(ch.homeSpot);
         if (home) {
@@ -2124,6 +2127,7 @@ export class Sim {
         ch.nextOutingAt = now + idleSitMs(ch.rng, this.options().liveliness);
       }
     }
+    this.arena.restoreAfterFastForward(now);
     for (const room of this.rooms.values()) {
       if (room.present && this.occupants(room) > 0) room.setLight(true, now - 10_000);
       room.switchClaim = null;
@@ -2151,6 +2155,64 @@ export class Sim {
       }
     }
     if (this.visit) this.applyVisitLight(now);
+  }
+
+  /** 按服务端权威 WorldSyncFrame 对齐本地客户端角色位置与状态（开赛前 5 秒强制校准）。 */
+  syncFromServerFrame(frame: WorldSyncFrame, now = Date.now()): void {
+    if (this.synced) {
+      this.applyWorldFrame(frame, now);
+      return;
+    }
+    if (this.visit || !this.initialized) return;
+
+    for (const cf of frame.chars) {
+      const ch = this.chars.get(cf.id);
+      if (!ch || ch.gone || ch.leaving) continue;
+      if (this.arena.isBusy(ch.id) && this.arena.state.phase !== 'idle') continue;
+
+      this.clearPlan(ch);
+      if (ch.atSpot) this.spots.release(ch.atSpot, ch.id);
+      ch.atSpot = null;
+
+      ch.x = cf.x;
+      ch.y = cf.y;
+      ch.tx = cf.tx;
+      ch.ty = cf.ty;
+      ch.dir = cf.dir as Dir;
+      ch.setPose(cf.pose as Pose, cf.held as HeldItem);
+      ch.seated = cf.seated;
+      ch.alpha = cf.alpha;
+      ch.visible = cf.visible;
+      ch.inside = cf.inside;
+      ch.sortY = cf.sortY;
+      ch.arriving = false;
+      ch.standTile = null;
+
+      if (cf.homeSpot && this.spots.get(cf.homeSpot)) {
+        if (ch.homeSpot && ch.homeSpot !== cf.homeSpot) this.spots.release(ch.homeSpot, ch.id);
+        const prevHomeOwner = this.spots.ownerOf(cf.homeSpot);
+        if (prevHomeOwner && prevHomeOwner !== ch.id) this.spots.release(cf.homeSpot, prevHomeOwner);
+        this.spots.reserve(cf.homeSpot, ch.id);
+        ch.homeSpot = cf.homeSpot;
+      }
+
+      if (cf.atSpot && this.spots.get(cf.atSpot)) {
+        const prevSpotOwner = this.spots.ownerOf(cf.atSpot);
+        if (prevSpotOwner && prevSpotOwner !== ch.id) this.spots.release(cf.atSpot, prevSpotOwner);
+        this.spots.reserve(cf.atSpot, ch.id);
+        if (cf.atSpot !== ch.homeSpot) ch.tempSpots.push(cf.atSpot);
+        ch.atSpot = cf.atSpot;
+      }
+
+      ch.nextOutingAt = now + 8_000 + Math.random() * 10_000;
+    }
+
+    if (frame.arena) {
+      this.arena.applyRemoteArenaEvent({ t: frame.t, arena: frame.arena }, now);
+    }
+    if (this.arena.state.phase !== 'idle') {
+      this.arena.restoreAfterFastForward(now);
+    }
   }
 
   private finishStep(ch: Character, s: Step, now: number): void {

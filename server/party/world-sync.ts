@@ -1,5 +1,6 @@
 import type { Appearance, ArtModule, RoomTheme } from '../../client/src/art/api';
 import { DEFAULT_WORLD_OPTIONS } from '../../client/src/world/api';
+import { PRE_DUEL_SYNC_LEAD_MS } from '../../client/src/world/sim/arena';
 import { Sim } from '../../client/src/world/sim/sim';
 import type { ArenaLeaderboardEntry, OfficeSnapshot, SyncedArenaEvent, SyncedArenaState, SyncedGathering, WorldSyncFrame } from '../../shared/types';
 
@@ -59,8 +60,10 @@ export class WorldSync {
   private latestFrame: WorldSyncFrame | null = null;
   private latestArenaEvent: SyncedArenaEvent;
   private lastArenaSig = '';
+  private preDuelSyncedForAt = 0;
   private readonly listeners = new Set<(frame: WorldSyncFrame) => void>();
   private readonly arenaListeners = new Set<(ev: SyncedArenaEvent) => void>();
+  private readonly preDuelListeners = new Set<(frame: WorldSyncFrame) => void>();
 
   constructor(
     initialSnapshot: OfficeSnapshot,
@@ -101,6 +104,11 @@ export class WorldSync {
     return () => void this.arenaListeners.delete(cb);
   }
 
+  onPreDuelSync(cb: (frame: WorldSyncFrame) => void): () => void {
+    this.preDuelListeners.add(cb);
+    return () => void this.preDuelListeners.delete(cb);
+  }
+
   getArenaEvent(): SyncedArenaEvent {
     return this.latestArenaEvent;
   }
@@ -122,13 +130,14 @@ export class WorldSync {
     this.lastTickAt = now;
     this.sim.update(dt, now);
     this.syncArenaChange(now);
+    const preFrame = this.maybeEmitPreDuelSync(now);
     if (this.listeners.size > 0) {
-      this.latestFrame = this.buildFrame(now);
+      this.latestFrame = preFrame ?? this.buildFrame(now);
       this.emit();
       return this.latestFrame;
     }
     this.latestFrame = null;
-    return this.buildFrame(now);
+    return preFrame ?? this.buildFrame(now);
   }
 
   start(intervalMs = 250): void {
@@ -147,8 +156,24 @@ export class WorldSync {
   }
 
   getFrame(): WorldSyncFrame {
-    if (!this.latestFrame) this.latestFrame = this.buildFrame(Date.now());
-    return this.latestFrame;
+    return this.buildFrame(Date.now());
+  }
+
+  private maybeEmitPreDuelSync(now: number): WorldSyncFrame | null {
+    const arena = this.sim.arena.state;
+    if (arena.phase !== 'idle' || !arena.nextDuelAt || arena.nextDuelAt <= 0) return null;
+    if (now < arena.nextDuelAt - PRE_DUEL_SYNC_LEAD_MS) return null;
+    if (this.preDuelSyncedForAt === arena.nextDuelAt) return null;
+    this.preDuelSyncedForAt = arena.nextDuelAt;
+    const frame = this.buildFrame(now);
+    for (const cb of this.preDuelListeners) {
+      try {
+        cb(frame);
+      } catch (err) {
+        console.error('[world-sync] pre-duel listener error', err);
+      }
+    }
+    return frame;
   }
 
   private syncArenaChange(now: number): void {

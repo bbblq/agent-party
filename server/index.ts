@@ -99,6 +99,11 @@ worldSync.onArena((ev) => {
   broadcastSse('arena', ev, true);
 });
 
+worldSync.onPreDuelSync((frame) => {
+  broadcastSse('snapshot', store.toSnapshot(), false);
+  broadcastSse('world', frame, false);
+});
+
 const sweepTimer = setInterval(() => {
   store.sweep();
 }, 30_000);

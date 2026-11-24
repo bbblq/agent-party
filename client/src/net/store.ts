@@ -131,6 +131,7 @@ export class OfficeStore {
   private retryAt: number | null = null;
   /** Desligado de propósito (disconnect()): não reconecta sozinho. */
   private stopped = true;
+  private syncingServer: Promise<WorldSyncFrame | null> | null = null;
   private readonly onOnline = () => {
     if (!this.stopped && this.connection === 'closed') this.reconnectNow();
   };
@@ -195,6 +196,39 @@ export class OfficeStore {
     this.closeSource();
     this.stopped = false;
     this.startSSE();
+  }
+
+  /** 强制向服务端拉取最新 snapshot 与 world 权威位置（开赛前 5 秒校准）。 */
+  async forceSyncWithServer(): Promise<WorldSyncFrame | null> {
+    if (this.mock || this.replay) return null;
+    if (this.syncingServer) return this.syncingServer;
+    const run = (async () => {
+      try {
+        const [snapRes, worldRes] = await Promise.all([
+          fetch('/api/snapshot', { cache: 'no-store' }),
+          fetch('/api/world', { cache: 'no-store' }),
+        ]);
+        if (snapRes.ok) {
+          const snap = (await snapRes.json()) as OfficeSnapshot;
+          if (snap && Array.isArray(snap.agents)) this.applySnapshot(snap);
+        }
+        if (worldRes.ok) {
+          const frame = (await worldRes.json()) as WorldSyncFrame;
+          if (frame && Array.isArray(frame.chars)) {
+            this.lastWorldFrame = frame;
+            this.emit('world', frame);
+            return frame;
+          }
+        }
+      } catch (err) {
+        console.warn('[store] pre-duel forceSyncWithServer failed', err);
+      }
+      return null;
+    })().finally(() => {
+      this.syncingServer = null;
+    });
+    this.syncingServer = run;
+    return run;
   }
 
   /** Quando será a próxima tentativa automática de reconexão (epoch ms), ou null. */

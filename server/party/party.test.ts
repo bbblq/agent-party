@@ -967,8 +967,8 @@ describe('Pokémon Duel Arena layout, lifecycle & leaderboard persistence', () =
     expect(soloSim.arena.toSyncedState().nextDuelAt).toBeUndefined();
   });
 
-  it('enforces hasBackView strictly for non-Pokemon pets, supports 2m duel cooldown & admin canDuel override, and decodes AP1 appearance codes', () => {
-    expect(DUEL_COOLDOWN_MS).toBe(120_000);
+  it('enforces hasBackView strictly for non-Pokemon pets, supports 3m duel cooldown & admin canDuel override, and decodes AP1 appearance codes', () => {
+    expect(DUEL_COOLDOWN_MS).toBe(180_000);
 
     const dir = makeTempDir();
     const pets = new PetRegistry(dir, null, null, join(process.cwd(), 'assets', 'default-pets'));
@@ -1168,5 +1168,74 @@ describe('Pokémon Duel Arena layout, lifecycle & leaderboard persistence', () =
     const adminScript = /<script>([\s\S]*?)<\/script>/.exec(adminHtml);
     expect(adminScript).toBeTruthy();
     expect(() => new Function(adminScript![1])).not.toThrow();
+  });
+
+  it('keeps dueling Pokemon on the arena ring across fastForward and triggers pre-duel server sync 5s before duel', () => {
+    const dir = makeTempDir();
+    const pets = new PetRegistry(dir, null, null, join(process.cwd(), 'assets', 'default-pets'));
+    const store = new PartyStore({ dataDir: dir, pets });
+
+    const t0 = Date.UTC(2026, 5, 1, 12, 0, 0);
+    store.report({ id: 'npc:sno', name: '卡比兽', status: 'working', petId: 'snorlax' }, t0);
+    store.report({ id: 'npc:psy', name: '可达鸭', status: 'working', petId: 'psyduck-3d' }, t0);
+
+    const world = new WorldSync(store.toSnapshot(t0));
+    const preSyncFrames: number[] = [];
+    world.onPreDuelSync((f) => preSyncFrames.push(f.t));
+
+    // Step server clock up to 5s before nextDuelAt
+    const firstNext = world.sim.arena.toSyncedState().nextDuelAt!;
+    expect(firstNext).toBeGreaterThan(t0);
+    world.step(firstNext - 6_000);
+    expect(preSyncFrames.length).toBe(0);
+    const frameAtPreSync = world.step(firstNext - 4_500);
+    expect(preSyncFrames.length).toBe(1);
+
+    // Client sim applies snapshot + pre-duel frame sync
+    const clientSim = new Sim(stubArt, () => DEFAULT_WORLD_OPTIONS, null);
+    clientSim.applySnapshot(store.toSnapshot(t0), t0);
+    clientSim.update(0.1, t0 + 100);
+    clientSim.syncFromServerFrame(frameAtPreSync, firstNext - 4_500);
+
+    // Server triggers duel and sends gather -> fight arena events
+    const res = world.triggerArenaDuel();
+    expect(res.ok).toBe(true);
+    clientSim.arena.applyRemoteArenaEvent(world.getArenaEvent(), firstNext);
+    clientSim.update(0.1, firstNext + 50);
+
+    const ringSpots = [...clientSim.spots.ofKind('arena_fight')].sort((a, b) => a.tx - b.tx);
+    const sno = clientSim.chars.get('npc:sno')!;
+    const psy = clientSim.chars.get('npc:psy')!;
+
+    // Even if client browser tab was hidden and fastForward runs mid-duel, fighters MUST stay on arena ring (never desk)
+    clientSim.fastForward(firstNext + 5_000);
+    const leftId = clientSim.arena.state.leftId!;
+    const rightId = clientSim.arena.state.rightId!;
+    const leftChar = clientSim.chars.get(leftId)!;
+    const rightChar = clientSim.chars.get(rightId)!;
+    expect(Math.hypot(leftChar.x - ringSpots[0].x, leftChar.y - ringSpots[0].y)).toBeLessThanOrEqual(2);
+    expect(Math.hypot(rightChar.x - ringSpots[1].x, rightChar.y - ringSpots[1].y)).toBeLessThanOrEqual(2);
+    expect(leftChar.seated).toBe(false);
+    expect(rightChar.seated).toBe(false);
+
+    // Also advance server into fight phase and push to client where fighter was artificially seated at desk: update() snaps them to ring
+    let now = Date.now() + 25_000;
+    for (let i = 0; i < 40 && world.sim.arena.state.phase === 'gather'; i++) {
+      now += 500;
+      world.step(now);
+    }
+    expect(world.sim.arena.state.phase).toBe('fight');
+    sno.seated = true;
+    sno.x = 10;
+    sno.y = 10;
+    psy.seated = true;
+    psy.x = 20;
+    psy.y = 20;
+    clientSim.arena.applyRemoteArenaEvent(world.getArenaEvent(), now);
+    clientSim.update(0.1, now + 50);
+    expect(Math.hypot(leftChar.x - ringSpots[0].x, leftChar.y - ringSpots[0].y)).toBeLessThanOrEqual(2);
+    expect(Math.hypot(rightChar.x - ringSpots[1].x, rightChar.y - ringSpots[1].y)).toBeLessThanOrEqual(2);
+    expect(leftChar.dir).toBe('right');
+    expect(rightChar.dir).toBe('left');
   });
 });

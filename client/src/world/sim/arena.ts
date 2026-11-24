@@ -7,7 +7,8 @@ import type { Sim } from './sim';
 import type { Step } from './steps';
 
 export const DUEL_DURATION_MS = 60_000;
-export const DUEL_COOLDOWN_MS = 120_000;
+export const DUEL_COOLDOWN_MS = 180_000;
+export const PRE_DUEL_SYNC_LEAD_MS = 5_000;
 const GATHER_TIMEOUT_MS = 18_000;
 const FINISH_HOLD_MS = 6_000;
 const FX_DURATION_MS = 950;
@@ -231,9 +232,31 @@ export class ArenaController {
     }
 
     if (this.remoteDriven) {
+      const leftCur = this.state.leftId ? this.sim.chars.get(this.state.leftId) : undefined;
+      const rightCur = this.state.rightId ? this.sim.chars.get(this.state.rightId) : undefined;
+      const spots = this.ringSpots();
+      if (spots) {
+        if (this.state.phase === 'gather') {
+          const ensureGather = (ch: Character | undefined, spot: SpotDef, line: string) => {
+            if (!this.isParticipantValid(ch)) return;
+            const onNonArenaSpot = !!ch!.atSpot && !ch!.atSpot.startsWith(ARENA_ID);
+            const idleOutside = !ch!.step && ch!.queue.length === 0 && Math.hypot(ch!.x - spot.x, ch!.y - spot.y) > 12;
+            if (onNonArenaSpot || idleOutside) {
+              this.dispatchToSpot(ch!, spot, true, line, now);
+            }
+          };
+          ensureGather(leftCur, spots.left, `${rightCur?.info.name || '对手'}，来切磋一局！⚔️`);
+          ensureGather(rightCur, spots.right, `正合我意，${leftCur?.info.name || '朋友'}！⚡`);
+        } else if (this.state.phase === 'fight' || this.state.phase === 'finish') {
+          if (this.isParticipantValid(leftCur) && (leftCur!.seated || Math.hypot(leftCur!.x - spots.left.x, leftCur!.y - spots.left.y) > 12)) {
+            this.snapToSpot(leftCur!, spots.left);
+          }
+          if (this.isParticipantValid(rightCur) && (rightCur!.seated || Math.hypot(rightCur!.x - spots.right.x, rightCur!.y - spots.right.y) > 12)) {
+            this.snapToSpot(rightCur!, spots.right);
+          }
+        }
+      }
       if (this.state.phase === 'fight' || this.state.phase === 'finish') {
-        const leftCur = this.state.leftId ? this.sim.chars.get(this.state.leftId) : undefined;
-        const rightCur = this.state.rightId ? this.sim.chars.get(this.state.rightId) : undefined;
         if (leftCur) leftCur.dir = 'right';
         if (rightCur) rightCur.dir = 'left';
       }
@@ -574,7 +597,13 @@ export class ArenaController {
     } finally {
       this.internalClearing = false;
     }
-    if (!this.sim.reserveTemp(ch, spot)) return false;
+    if (!this.sim.reserveTemp(ch, spot)) {
+      const prevOwner = this.sim.spots.ownerOf(spot.id);
+      if (prevOwner && prevOwner !== ch.id) {
+        this.sim.spots.release(spot.id, prevOwner);
+      }
+      if (!this.sim.reserveTemp(ch, spot)) return false;
+    }
 
     const steps: Step[] = [];
     this.sim.pushLeave(ch, steps);
@@ -643,15 +672,54 @@ export class ArenaController {
   private snapToSpot(ch: Character, spot: SpotDef): void {
     ch.queue.length = 0;
     ch.step = null;
+    ch.replan = false;
     if (ch.atSpot && ch.atSpot !== spot.id) this.sim.spots.release(ch.atSpot, ch.id);
+    this.sim.releaseTemp(ch);
+    const prevOwner = this.sim.spots.ownerOf(spot.id);
+    if (prevOwner && prevOwner !== ch.id) {
+      this.sim.spots.release(spot.id, prevOwner);
+    }
+    this.sim.reserveTemp(ch, spot);
     ch.atSpot = spot.id;
     ch.seated = false;
+    ch.inside = false;
+    ch.alpha = 1;
     ch.sortY = null;
     ch.placeAtTile(spot.tx, spot.ty);
     ch.x = spot.x;
     ch.y = spot.y;
     ch.dir = spot.dir;
+    ch.setPose('stand');
     ch.queue.push({ t: 'act', pose: 'stand', ms: 90_000 });
+  }
+
+  restoreAfterFastForward(now: number): void {
+    if (this.state.phase === 'idle') return;
+    const spots = this.ringSpots();
+    if (!spots) return;
+    const left = this.state.leftId ? this.sim.chars.get(this.state.leftId) : undefined;
+    const right = this.state.rightId ? this.sim.chars.get(this.state.rightId) : undefined;
+    if (this.isParticipantValid(left)) this.snapToSpot(left!, spots.left);
+    if (this.isParticipantValid(right)) this.snapToSpot(right!, spots.right);
+    if (this.state.phase === 'fight' || this.state.phase === 'finish') {
+      if (left) left.dir = 'right';
+      if (right) right.dir = 'left';
+    }
+    const freeWatch = this.sim.spots
+      .ofKind('arena_watch')
+      .filter((s) => s.areaId === ARENA_ID && this.sim.spots.isFree(s.id));
+    let wIdx = 0;
+    for (const id of this.state.watchers) {
+      const w = this.sim.chars.get(id);
+      if (!this.isParticipantValid(w)) continue;
+      const cur = w!.atSpot ? this.sim.spots.get(w!.atSpot) : undefined;
+      if (cur && cur.areaId === ARENA_ID) continue;
+      while (wIdx < freeWatch.length && !this.sim.canUseSeat(w!, freeWatch[wIdx])) wIdx++;
+      if (wIdx < freeWatch.length) {
+        this.snapToSpot(w!, freeWatch[wIdx++]);
+      }
+    }
+    void now;
   }
 
   private beginFight(left: Character, right: Character, now: number): void {
