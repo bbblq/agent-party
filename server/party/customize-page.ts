@@ -84,8 +84,9 @@ const STYLE_LABELS = {
   },
 };
 
-export function renderCustomizeHtml(baseUrl: string): string {
+export function renderCustomizeHtml(baseUrl: string, initialCode = ''): string {
   const safeBase = baseUrl.replace(/\/+$/, '');
+  const initialCodeJson = JSON.stringify(initialCode.trim()).replaceAll('<', '\\u003c');
   const paletteData = JSON.stringify({
     serverUrl: safeBase,
     skins: SKINS,
@@ -215,6 +216,46 @@ export function renderCustomizeHtml(baseUrl: string): string {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
     .msg { font-size: 12px; margin-top: 8px; }
+    .token-card {
+      background: rgba(82, 196, 255, 0.08);
+      border: 1px solid rgba(82, 196, 255, 0.35);
+      border-radius: 11px;
+      padding: 11px 12px;
+      margin-bottom: 14px;
+    }
+    .token-card h3 {
+      margin: 0 0 6px;
+      font-size: 13px;
+      color: var(--accent);
+    }
+    .identity-banner {
+      margin-top: 8px;
+      padding: 7px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      background: rgba(15, 23, 42, 0.72);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .identity-banner.ok {
+      border-color: rgba(74, 222, 128, 0.45);
+      background: rgba(20, 83, 45, 0.25);
+      color: #dcfce7;
+    }
+    .identity-banner.err {
+      border-color: rgba(248, 113, 113, 0.45);
+      background: rgba(127, 29, 29, 0.25);
+      color: #fecaca;
+    }
+    .pet-quick {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 6px;
+    }
   </style>
 </head>
 <body>
@@ -222,7 +263,7 @@ export function renderCustomizeHtml(baseUrl: string): string {
     <div class="topbar">
       <div class="title">
         <h1>🎨 像素小人捏脸工坊</h1>
-        <p>自由定制你的发型、肤色、衣服颜色与配饰，可一键直接发送到办公室后台，或复制代码回传给你的 AI 助手。</p>
+        <p>输入你的专属后台代码（或通过专属链接直接进入）自动识别身份，捏脸修改后一键保存回办公室。</p>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <a class="btn" id="open-office-link" href="${escapeHtmlAttr(safeBase)}/" target="_blank">🏢 打开虚拟办公室大屏</a>
@@ -231,6 +272,20 @@ export function renderCustomizeHtml(baseUrl: string): string {
 
     <div class="grid">
       <div class="card">
+        <div class="token-card">
+          <h3>🔑 身份识别（专属后台代码）</h3>
+          <div style="display:flex;gap:6px">
+            <input id="inp-token" type="text" placeholder="粘贴专属代码（如 ap_xxxxxx）或专属链接" value="${escapeHtmlAttr(initialCode)}" />
+            <button class="btn btn-primary btn-sm" id="load-token-btn" type="button" style="white-space:nowrap">识别身份</button>
+          </div>
+          <div id="identity-banner" class="identity-banner">
+            <span>粘贴接入后拿到的专属后台代码即可载入你的角色；或直接填写下方昵称保存。</span>
+          </div>
+          <div style="margin-top:8px;display:none" id="direct-link-row">
+            <button class="btn btn-sm" id="copy-direct-link-btn" type="button" style="width:100%">🔗 复制专属捏脸链接</button>
+          </div>
+        </div>
+
         <div class="preview-box">
           <canvas id="preview" width="168" height="238"></canvas>
           <div class="look-row">
@@ -241,16 +296,26 @@ export function renderCustomizeHtml(baseUrl: string): string {
         </div>
 
         <div class="field">
-          <label for="inp-name">你的昵称（头顶显示，同时用于服务器成员标识）</label>
+          <label for="inp-name">你的昵称（头顶显示）</label>
           <input id="inp-name" type="text" maxlength="24" placeholder="例如：小张 / Alice" />
         </div>
         <div class="field">
-          <label for="inp-role">岗位 / 签名（可选）</label>
+          <label for="inp-role">职位 / 岗位（可选）</label>
           <input id="inp-role" type="text" maxlength="32" placeholder="例如：全栈开发 / AI 伙伴" />
         </div>
         <div class="field">
-          <label for="inp-pet">伴随宝可梦（可选，填中文名/英文名/编号，留空不修改）</label>
+          <label for="inp-pet">伴随宝可梦（填名字/编号；选“不带宠物”可移除）</label>
           <input id="inp-pet" type="text" maxlength="32" placeholder="例如：皮卡丘 / 可达鸭 / 耿鬼" />
+          <div class="pet-quick" id="pet-quick-chips">
+            <button class="chip" type="button" data-pet="皮卡丘">皮卡丘</button>
+            <button class="chip" type="button" data-pet="可达鸭">可达鸭</button>
+            <button class="chip" type="button" data-pet="耿鬼">耿鬼</button>
+            <button class="chip" type="button" data-pet="伊布">伊布</button>
+            <button class="chip" type="button" data-pet="卡比兽">卡比兽</button>
+            <button class="chip" type="button" data-pet="喷火龙">喷火龙</button>
+            <button class="chip" type="button" data-pet="路卡利欧">路卡利欧</button>
+            <button class="chip" type="button" data-pet="">不带宠物</button>
+          </div>
         </div>
         <div class="field">
           <label for="inp-server">后台服务器地址</label>
@@ -258,20 +323,20 @@ export function renderCustomizeHtml(baseUrl: string): string {
         </div>
 
         <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
-          <button class="btn btn-ok" id="send-btn" type="button">✨ 确认并直接发送到办公室后台</button>
-          <button class="btn btn-primary" id="copy-code-btn" type="button">📋 复制捏脸代码（粘贴回 AI 对话框）</button>
+          <button class="btn btn-ok" id="send-btn" type="button">💾 保存修改到办公室后台</button>
+          <button class="btn btn-primary" id="copy-code-btn" type="button">📋 复制 AP1:... 离线换装代码</button>
         </div>
         <div id="status-msg" class="msg"></div>
 
         <div class="code-box">
           <div style="font-size:12px;color:var(--muted);display:flex;justify-content:space-between;align-items:center">
-            <span>你的专属捏脸代码（发回 AI 助手即可应用并永久保存）</span>
+            <span>离线换装代码（无直连时可发回 AI 对话框应用）</span>
           </div>
           <code id="code-out"></code>
         </div>
 
         <div class="code-box" style="margin-top:10px;border-style:solid;border-color:var(--border)">
-          <label for="code-import" style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">导入已有 AP1:... 代码继续修改：</label>
+          <label for="code-import" style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">导入已有 AP1:... 离线代码继续修改：</label>
           <div style="display:flex;gap:6px">
             <input id="code-import" type="text" placeholder="粘贴 AP1:... 代码" />
             <button class="btn btn-sm" id="import-btn" type="button">载入</button>
@@ -285,6 +350,7 @@ export function renderCustomizeHtml(baseUrl: string): string {
 
   <script>
     const DATA = ${paletteData};
+    const INITIAL_CODE = ${initialCodeJson};
     const $ = (id) => document.getElementById(id);
 
     const state = {
@@ -589,12 +655,123 @@ export function renderCustomizeHtml(baseUrl: string): string {
       void refreshPreview();
     }
 
+    let recognizedCode = '';
+    let recognizedUrl = '';
+
+    function extractToken(raw) {
+      const m = /(?:^|\\/|\\b)(ap_[A-Za-z0-9_-]{8,48})\\b/.exec(String(raw || '').trim());
+      return m ? m[1] : '';
+    }
+
+    function syncPetQuickChips() {
+      const cur = $('inp-pet').value.trim();
+      const chips = $('pet-quick-chips').querySelectorAll('[data-pet]');
+      for (const ch of chips) {
+        const val = ch.getAttribute('data-pet') || '';
+        ch.classList.toggle('active', val === cur);
+      }
+    }
+
+    function setIdentityBanner(kind, htmlText) {
+      const el = $('identity-banner');
+      el.className = 'identity-banner' + (kind ? ' ' + kind : '');
+      el.textContent = htmlText;
+    }
+
+    function applyProfile(profile) {
+      recognizedCode = profile.customizeCode || '';
+      recognizedUrl = profile.customizeUrl || (serverDefault + '/customize/' + recognizedCode);
+      if (recognizedCode) $('inp-token').value = recognizedCode;
+      $('inp-name').value = profile.name || '';
+      $('inp-role').value = profile.role || '';
+      $('inp-pet').value = profile.companionPetName || '';
+      if (profile.look === 'f' || profile.look === 'm') state.look = profile.look;
+      if (typeof profile.seed === 'number') state.seed = profile.seed >>> 0;
+      if (profile.parts && typeof profile.parts === 'object') Object.assign(state.parts, profile.parts);
+      syncPetQuickChips();
+      renderControls();
+      void refreshPreview();
+
+      const petHint = profile.companionFullName
+        ? (' · 宠物：' + profile.companionFullName)
+        : (profile.companionPetName ? (' · 宠物：' + profile.companionPetName) : ' · 暂未携带宠物');
+      setIdentityBanner('ok', '✅ 已识别：' + (profile.name || profile.id) + '（' + (profile.role || 'AI 伙伴') + '）' + petHint);
+      $('direct-link-row').style.display = recognizedCode ? 'block' : 'none';
+
+      if (recognizedCode && typeof history !== 'undefined' && typeof location !== 'undefined' && location.protocol.startsWith('http')) {
+        const targetPath = '/customize/' + encodeURIComponent(recognizedCode);
+        if (location.pathname !== targetPath) {
+          history.replaceState(null, '', targetPath);
+        }
+      }
+    }
+
+    async function loadProfileByCode(rawCode, quietIfEmpty) {
+      const token = extractToken(rawCode);
+      if (!token) {
+        if (!quietIfEmpty) {
+          setIdentityBanner('err', '❌ 请输入有效的专属后台代码（格式如 ap_xxxxxxxxxxxx 或完整专属链接）');
+        }
+        return false;
+      }
+      recognizedCode = token;
+      $('inp-token').value = token;
+      const base = ($('inp-server').value.trim() || serverDefault).replace(/\\/+$/, '');
+      setIdentityBanner('', '正在识别专属后台代码 ' + token + '…');
+      try {
+        const res = await fetch(base + '/api/customize/profile?code=' + encodeURIComponent(token));
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok || !data.profile) {
+          throw new Error(data.error || ('HTTP ' + res.status));
+        }
+        applyProfile(data.profile);
+        return true;
+      } catch (err) {
+        recognizedCode = '';
+        recognizedUrl = '';
+        $('direct-link-row').style.display = 'none';
+        setIdentityBanner('err', '❌ 识别失败：' + (err && err.message ? err.message : String(err)));
+        return false;
+      }
+    }
+
     $('look-m').addEventListener('click', () => { state.look = 'm'; void refreshPreview(); });
     $('look-f').addEventListener('click', () => { state.look = 'f'; void refreshPreview(); });
     $('reroll-btn').addEventListener('click', randomizeLook);
     $('inp-name').addEventListener('input', () => { $('code-out').textContent = currentCode(); });
     $('inp-role').addEventListener('input', () => { $('code-out').textContent = currentCode(); });
-    $('inp-pet').addEventListener('input', () => { $('code-out').textContent = currentCode(); });
+    $('inp-pet').addEventListener('input', () => {
+      syncPetQuickChips();
+      $('code-out').textContent = currentCode();
+    });
+    $('pet-quick-chips').addEventListener('click', (e) => {
+      const btn = e.target && e.target.closest ? e.target.closest('[data-pet]') : null;
+      if (!btn) return;
+      $('inp-pet').value = btn.getAttribute('data-pet') || '';
+      syncPetQuickChips();
+      $('code-out').textContent = currentCode();
+    });
+    $('load-token-btn').addEventListener('click', () => {
+      void loadProfileByCode($('inp-token').value, false);
+    });
+    $('inp-token').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        void loadProfileByCode($('inp-token').value, false);
+      }
+    });
+    $('copy-direct-link-btn').addEventListener('click', async () => {
+      const url = recognizedUrl || (serverDefault + '/customize/' + recognizedCode);
+      const msg = $('status-msg');
+      try {
+        await navigator.clipboard.writeText(url);
+        msg.style.color = 'var(--ok)';
+        msg.textContent = '✅ 已复制专属捏脸直达链接：' + url;
+      } catch {
+        msg.style.color = '#fde047';
+        msg.textContent = '你的专属捏脸链接：' + url;
+      }
+    });
     $('inp-server').addEventListener('change', () => {
       $('open-office-link').href = ($('inp-server').value.trim() || serverDefault).replace(/\\/+$/, '') + '/';
       void refreshPreview();
@@ -606,7 +783,7 @@ export function renderCustomizeHtml(baseUrl: string): string {
       try {
         await navigator.clipboard.writeText(code);
         msg.style.color = 'var(--ok)';
-        msg.textContent = '✅ 已复制捏脸代码！直接粘贴发给你的 AI 助手对话框即可生效。';
+        msg.textContent = '✅ 已复制离线捏脸代码！直接粘贴发给你的 AI 助手对话框即可生效。';
       } catch {
         msg.style.color = '#fde047';
         msg.textContent = '请全选下方代码框内容复制并发送给你的 AI 助手。';
@@ -625,29 +802,61 @@ export function renderCustomizeHtml(baseUrl: string): string {
       const base = ($('inp-server').value.trim() || serverDefault).replace(/\\/+$/, '');
       const role = $('inp-role').value.trim() || 'AI 伙伴';
       const pet = $('inp-pet').value.trim();
-      const code = currentCode();
+      const token = recognizedCode || extractToken($('inp-token').value);
       msg.style.color = 'var(--muted)';
-      msg.textContent = '正在同步形象到虚拟办公室后台…';
+      msg.textContent = '正在保存你的形象与配置到虚拟办公室后台…';
       try {
-        const res = await fetch(base + '/api/report', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json; charset=utf-8' },
-          body: JSON.stringify({
-            id: name,
-            name,
-            role,
-            status: 'idle',
-            appearanceCode: code,
-            ...(pet ? { companionPokemon: pet } : {}),
-          }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
-        msg.style.color = 'var(--ok)';
-        msg.textContent = '✅ 已直接同步到办公室后台！如果配合 AI 助手长期保活，请同时点击上方“复制捏脸代码”发给你的 AI。';
+        if (token) {
+          const res = await fetch(base + '/api/customize/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json; charset=utf-8' },
+            body: JSON.stringify({
+              code: token,
+              name,
+              role,
+              look: state.look,
+              seed: state.seed >>> 0,
+              parts: state.parts,
+              companionPokemon: pet,
+            }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.ok || !data.profile) throw new Error(data.error || ('HTTP ' + res.status));
+          applyProfile(data.profile);
+          msg.style.color = 'var(--ok)';
+          msg.textContent = '✅ 已保存成功！办公室大屏已实时更新你的形象、职位与伴随宝可梦。';
+        } else {
+          const code = currentCode();
+          const res = await fetch(base + '/api/report', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json; charset=utf-8' },
+            body: JSON.stringify({
+              id: name,
+              name,
+              role,
+              status: 'idle',
+              appearanceCode: code,
+              ...(pet ? { companionPokemon: pet } : {}),
+            }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+          if (data.customizeCode) {
+            recognizedCode = data.customizeCode;
+            recognizedUrl = data.customizeUrl || (base + '/customize/' + data.customizeCode);
+            $('inp-token').value = recognizedCode;
+            setIdentityBanner('ok', '✅ 已同步并绑定专属代码：' + recognizedCode + '（下次可用此代码或专属链接直接回来修改）');
+            $('direct-link-row').style.display = 'block';
+            if (typeof history !== 'undefined' && typeof location !== 'undefined' && location.protocol.startsWith('http')) {
+              history.replaceState(null, '', '/customize/' + encodeURIComponent(recognizedCode));
+            }
+          }
+          msg.style.color = 'var(--ok)';
+          msg.textContent = '✅ 已同步到办公室后台！' + (data.customizeCode ? (' 你的专属后台代码：' + data.customizeCode) : '');
+        }
       } catch (err) {
         msg.style.color = '#ff8e99';
-        msg.textContent = '⚠️ 无法直连后台（' + err.message + '），请点击上方“复制捏脸代码”发给 AI 助手自动完成同步！';
+        msg.textContent = '⚠️ 保存失败（' + err.message + '）';
       }
     });
 
@@ -668,18 +877,35 @@ export function renderCustomizeHtml(baseUrl: string): string {
         if (obj.look === 'f' || obj.look === 'm') state.look = obj.look;
         if (typeof obj.seed === 'number') state.seed = obj.seed >>> 0;
         if (obj.parts && typeof obj.parts === 'object') Object.assign(state.parts, obj.parts);
+        syncPetQuickChips();
         renderControls();
         void refreshPreview();
         msg.style.color = 'var(--ok)';
-        msg.textContent = '✅ 已载入捏脸代码，可继续微调或重新发送！';
+        msg.textContent = '✅ 已载入离线捏脸代码，可继续微调或保存！';
       } catch {
         msg.style.color = '#ff8e99';
         msg.textContent = '❌ 解析捏脸代码失败。';
       }
     });
 
+    syncPetQuickChips();
     renderControls();
     void refreshPreview();
+
+    (function autoLoadInitialToken() {
+      let candidate = extractToken(INITIAL_CODE);
+      if (!candidate && typeof location !== 'undefined') {
+        const pathMatch = /^\\/customize\\/([^/]+)$/.exec(location.pathname);
+        if (pathMatch) candidate = extractToken(decodeURIComponent(pathMatch[1]));
+        if (!candidate && location.search) {
+          const sp = new URLSearchParams(location.search);
+          candidate = extractToken(sp.get('code') || sp.get('token') || '');
+        }
+      }
+      if (candidate) {
+        void loadProfileByCode(candidate, true);
+      }
+    })();
   </script>
 </body>
 </html>`;

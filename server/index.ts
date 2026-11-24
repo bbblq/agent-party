@@ -272,6 +272,12 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       id: result.member.id,
       name: result.member.name,
       status: result.member.lastStatus,
+      ...(result.member.editToken
+        ? {
+            customizeCode: result.member.editToken,
+            customizeUrl: `${getBaseUrl(req)}/customize/${result.member.editToken}`,
+          }
+        : {}),
       ...(result.companion
         ? {
             companion: {
@@ -415,8 +421,133 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
   }
 
   // ---- Setup, Self-Service Customizer & Client Scripts
-  if (method === 'GET' && (p === '/customize' || p === '/customize.html')) {
-    sendText(res, 200, renderCustomizeHtml(getBaseUrl(req)), 'text/html; charset=utf-8');
+  if (method === 'GET' && p === '/customize.html') {
+    const initialCode = url.searchParams.get('code') ?? url.searchParams.get('token') ?? '';
+    sendText(res, 200, renderCustomizeHtml(getBaseUrl(req), initialCode), 'text/html; charset=utf-8');
+    return true;
+  }
+  const customizePageMatch = /^\/customize(?:\/([^/]+))?$/.exec(p);
+  if (method === 'GET' && customizePageMatch) {
+    const initialCode =
+      (customizePageMatch[1] ? decodeURIComponent(customizePageMatch[1]) : '') ||
+      url.searchParams.get('code') ||
+      url.searchParams.get('token') ||
+      '';
+    sendText(res, 200, renderCustomizeHtml(getBaseUrl(req), initialCode), 'text/html; charset=utf-8');
+    return true;
+  }
+  const profileMatch = /^\/api\/customize\/profile(?:\/([^/]+))?$/.exec(p);
+  if (method === 'GET' && profileMatch) {
+    const code =
+      (profileMatch[1] ? decodeURIComponent(profileMatch[1]) : '') ||
+      url.searchParams.get('code') ||
+      url.searchParams.get('token') ||
+      '';
+    const r = store.getMemberByEditToken(code);
+    if (!r.ok) {
+      sendJson(res, r.statusCode, { ok: false, error: r.error });
+      return true;
+    }
+    const base = getBaseUrl(req);
+    sendJson(res, 200, {
+      ok: true,
+      profile: {
+        id: r.member.id,
+        name: r.member.name,
+        role: r.member.role,
+        agentTool: r.member.agentTool,
+        status: r.member.lastStatus,
+        look: r.member.look,
+        seed: r.member.seed,
+        parts: r.resolvedParts,
+        ...(r.companionPetId ? { companionPetId: r.companionPetId } : {}),
+        ...(r.companionPetName ? { companionPetName: r.companionPetName } : {}),
+        ...(r.companionFullName ? { companionFullName: r.companionFullName } : {}),
+        customizeCode: r.member.editToken,
+        customizeUrl: `${base}/customize/${r.member.editToken}`,
+      },
+    });
+    return true;
+  }
+  if (method === 'POST' && p === '/api/customize/save') {
+    const body = await readJson<{
+      code?: string;
+      name?: string;
+      role?: string;
+      look?: 'f' | 'm';
+      seed?: number;
+      parts?: unknown;
+      companionPokemon?: string;
+    }>(req);
+    const code = typeof body.code === 'string' ? body.code : '';
+    const found = store.getMemberByEditToken(code);
+    if (!found.ok) {
+      sendJson(res, found.statusCode, { ok: false, error: found.error });
+      return true;
+    }
+
+    let companionPetId: string | null | undefined;
+    let companionPetName: string | undefined;
+    if (body.companionPokemon !== undefined) {
+      const rawPet = typeof body.companionPokemon === 'string' ? body.companionPokemon.trim() : '';
+      if (!rawPet || /^(?:无|没有|不带|不用|取消|none)$/i.test(rawPet)) {
+        companionPetId = null;
+      } else if (
+        rawPet === found.companionPetName ||
+        rawPet === found.companionFullName ||
+        rawPet === found.companionPetId
+      ) {
+        companionPetId = found.companionPetId;
+        companionPetName = found.companionPetName;
+      } else {
+        const directPet = pets.getPet(rawPet);
+        if (directPet) {
+          companionPetId = rawPet;
+          companionPetName = directPet.displayName;
+        } else {
+          const cRes = await pokemon.ensurePokemonPet(rawPet);
+          if (!cRes.ok) {
+            sendJson(res, 400, { ok: false, error: cRes.error || '未找到该宝可梦，请换一个名称或图鉴编号' });
+            return true;
+          }
+          companionPetId = cRes.pet.id;
+          companionPetName = cRes.pokemon.zh_hans || cRes.pokemon.en;
+        }
+      }
+    }
+
+    const updated = store.updateMemberByEditToken(code, {
+      name: body.name,
+      role: body.role,
+      look: body.look,
+      seed: body.seed,
+      parts: body.parts,
+      companionPetId,
+      companionPetName,
+    });
+    if (!updated.ok) {
+      sendJson(res, updated.statusCode, { ok: false, error: updated.error });
+      return true;
+    }
+    const base = getBaseUrl(req);
+    sendJson(res, 200, {
+      ok: true,
+      profile: {
+        id: updated.member.id,
+        name: updated.member.name,
+        role: updated.member.role,
+        agentTool: updated.member.agentTool,
+        status: updated.member.lastStatus,
+        look: updated.member.look,
+        seed: updated.member.seed,
+        parts: updated.resolvedParts,
+        ...(updated.companionPetId ? { companionPetId: updated.companionPetId } : {}),
+        ...(updated.companionPetName ? { companionPetName: updated.companionPetName } : {}),
+        ...(updated.companionFullName ? { companionFullName: updated.companionFullName } : {}),
+        customizeCode: updated.member.editToken,
+        customizeUrl: `${base}/customize/${updated.member.editToken}`,
+      },
+    });
     return true;
   }
   if (method === 'GET' && p === '/api/character/frame') {

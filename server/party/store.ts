@@ -1,5 +1,7 @@
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { appearanceFromSeed } from '../../client/src/art/character/appearance';
 import { isPokemonPet } from '../../client/src/world/sim/arena';
 import {
   decodeAppearanceCode,
@@ -32,6 +34,7 @@ export interface MemberRecord {
   avatarMode: 'pet' | 'human';
   petId?: string;
   ownerId?: string;
+  editToken?: string;
   canDuel?: boolean;
   agentTool?: string;
   isNpc?: true;
@@ -139,6 +142,8 @@ export interface ReportInput {
   seed?: number;
   parts?: AppearanceParts;
   appearanceCode?: string;
+  customizeCode?: string;
+  editToken?: string;
   agentTool?: string;
   tool?: string;
   sessionId?: string;
@@ -172,6 +177,14 @@ function cleanText(v: unknown, maxLen: number): string | undefined {
   const trimmed = v.replace(/[\r\n\t]+/g, ' ').trim();
   if (!trimmed) return undefined;
   return trimmed.slice(0, maxLen);
+}
+
+const TOKEN_ALPHABET = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+export function extractEditToken(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const m = /(?:^|\/|\b)(ap_[A-Za-z0-9_-]{8,48})\b/.exec(raw.trim());
+  return m ? m[1] : null;
 }
 
 function statusActivity(status: 'working' | 'waiting' | 'idle', at: number): Activity {
@@ -215,6 +228,29 @@ export class PartyStore {
     this.load();
   }
 
+  private generateUniqueEditToken(): string {
+    const used = new Set<string>();
+    for (const m of this.members.values()) {
+      if (m.editToken) used.add(m.editToken);
+    }
+    for (let attempt = 0; attempt < 32; attempt++) {
+      const buf = randomBytes(12);
+      let code = 'ap_';
+      for (let i = 0; i < 12; i++) {
+        code += TOKEN_ALPHABET[buf[i] % TOKEN_ALPHABET.length];
+      }
+      if (!used.has(code)) return code;
+    }
+    return `ap_${randomBytes(9).toString('hex')}`;
+  }
+
+  private isEditTokenOwnedByOther(token: string, ownerId: string): boolean {
+    for (const m of this.members.values()) {
+      if (m.editToken === token && m.id !== ownerId) return true;
+    }
+    return false;
+  }
+
   onChange(cb: () => void): () => void {
     this.listeners.add(cb);
     return () => void this.listeners.delete(cb);
@@ -243,6 +279,10 @@ export class PartyStore {
             ...m,
             sessions: m.sessions && typeof m.sessions === 'object' ? m.sessions : {},
           };
+          if (!rec.isNpc && !rec.ownerId && !rec.editToken) {
+            rec.editToken = this.generateUniqueEditToken();
+            this.dirty = true;
+          }
           if (!rec.isNpc && !rec.ownerId && rec.lastStatus !== 'offline' && Object.keys(rec.sessions).length > 0) {
             this.recomputeEffectiveStatus(rec, rec.lastSeenAt || Date.now());
           }
@@ -356,6 +396,11 @@ export class PartyStore {
     const customSeed = parseSeed(raw.seed) ?? decoded?.seed ?? null;
     const customParts = raw.parts !== undefined ? parseAppearanceParts(raw.parts) : decoded?.parts ?? null;
     const hasSelfAppearance = !!(customLook || customSeed !== null || customParts !== null);
+    const parsedRequestedToken = extractEditToken(raw.customizeCode ?? raw.editToken);
+    const requestedToken =
+      parsedRequestedToken && !this.isEditTokenOwnedByOther(parsedRequestedToken, id)
+        ? parsedRequestedToken
+        : null;
 
     let m = this.members.get(id);
     if (!m) {
@@ -371,6 +416,7 @@ export class PartyStore {
             ...(customParts ? { parts: customParts } : {}),
             avatarMode: petSlug && this.pets.getPet(petSlug) ? 'pet' : 'human',
             ...(petSlug ? { petId: petSlug } : {}),
+            ...(requestedToken ? { editToken: requestedToken } : {}),
             ...(toolName ? { agentTool: toolName } : {}),
             lastStatus: 'offline',
             statusSince: now,
@@ -390,6 +436,7 @@ export class PartyStore {
         ...(customParts ? { parts: customParts } : {}),
         avatarMode: hasPet ? 'pet' : 'human',
         ...(hasPet && petSlug ? { petId: petSlug } : {}),
+        editToken: requestedToken ?? this.generateUniqueEditToken(),
         ...(toolName ? { agentTool: toolName } : {}),
         lastStatus: status,
         statusSince: now,
@@ -408,6 +455,10 @@ export class PartyStore {
     // Protect NPCs and system-managed companion pets from being overwritten via /api/report
     if (m.isNpc || m.ownerId) {
       return { ok: false, error: '无法通过上报接口修改 NPC 或系统托管角色。', statusCode: 403 };
+    }
+
+    if (!m.editToken) {
+      m.editToken = requestedToken ?? this.generateUniqueEditToken();
     }
 
     // Update profile metadata when provided (unless customized via web UI without self-customization payload)
@@ -482,6 +533,8 @@ export class PartyStore {
     const pet = petSlug ? this.pets.getPet(petSlug) : undefined;
     if (!pet && !existing) return undefined;
 
+    if (!existing && owner.custom) return undefined;
+
     if (!existing && pet && petSlug) {
       const comp: MemberRecord = {
         id: compId,
@@ -510,8 +563,8 @@ export class PartyStore {
         existing.lastStatus = 'idle';
         existing.statusSince = now;
       }
-      if (!existing.custom) {
-        existing.role = `${owner.name}的伙伴`;
+      existing.role = `${owner.name}的伙伴`;
+      if (!owner.custom && !existing.custom) {
         if (pet && petSlug) {
           existing.petId = petSlug;
           existing.avatarMode = 'pet';
@@ -695,6 +748,179 @@ export class PartyStore {
     m.seed = hash32(m.id);
     this.emit();
     return { ok: true };
+  }
+
+  // ------------------------------------------------------------------ Exclusive Self-Service Customizer
+
+  private findMemberByToken(rawCode: string): MemberRecord | undefined {
+    const trimmed = cleanText(rawCode, 128);
+    const token = extractEditToken(rawCode) ?? trimmed;
+    if (!token) return undefined;
+    for (const m of this.members.values()) {
+      if (!m.isNpc && !m.ownerId && m.editToken === token) {
+        return m;
+      }
+    }
+    return undefined;
+  }
+
+  getMemberByEditToken(rawCode: string):
+    | {
+        ok: true;
+        member: MemberRecord;
+        resolvedParts: AppearanceParts;
+        companionPetId?: string;
+        companionPetName?: string;
+        companionFullName?: string;
+      }
+    | { ok: false; statusCode: number; error: string } {
+    const m = this.findMemberByToken(rawCode);
+    if (!m) {
+      return {
+        ok: false,
+        statusCode: 404,
+        error: '未找到该专属代码对应的成员，请确认代码是否正确（需先通过 AI 助手完成首次接入）。',
+      };
+    }
+    const resolved = appearanceFromSeed(m.seed, { look: m.look, parts: m.parts });
+    const resolvedParts: AppearanceParts = {
+      skin: resolved.skin,
+      hairStyle: resolved.hairStyle,
+      hair: resolved.hair,
+      facialHair: resolved.facialHair,
+      eyes: resolved.eyes,
+      topStyle: resolved.topStyle,
+      top: resolved.top,
+      topAccent: resolved.topAccent,
+      bottomStyle: resolved.bottomStyle,
+      bottom: resolved.bottom,
+      shoes: resolved.shoes,
+      accessory: resolved.accessory,
+      accessoryColor: resolved.accessoryColor,
+    };
+
+    const existingComp = this.members.get(`${m.id}:pet`);
+    let companionPetId: string | undefined;
+    let companionPetName: string | undefined;
+    let companionFullName: string | undefined;
+    if (existingComp && existingComp.lastStatus !== 'offline') {
+      companionPetId = existingComp.petId;
+      companionFullName = existingComp.name;
+      const prefix = `${m.name}的`;
+      companionPetName = existingComp.name.startsWith(prefix)
+        ? existingComp.name.slice(prefix.length)
+        : existingComp.name;
+    }
+
+    return {
+      ok: true,
+      member: m,
+      resolvedParts,
+      ...(companionPetId ? { companionPetId } : {}),
+      ...(companionPetName ? { companionPetName } : {}),
+      ...(companionFullName ? { companionFullName } : {}),
+    };
+  }
+
+  updateMemberByEditToken(
+    rawCode: string,
+    patch: {
+      name?: string;
+      role?: string;
+      look?: 'f' | 'm';
+      seed?: number;
+      parts?: unknown;
+      companionPetId?: string | null;
+      companionPetName?: string;
+    },
+    now = Date.now(),
+  ): ReturnType<PartyStore['getMemberByEditToken']> {
+    const found = this.getMemberByEditToken(rawCode);
+    if (!found.ok) return found;
+    const m = found.member;
+    const oldName = m.name;
+
+    if (patch.name !== undefined) {
+      const cleanName = cleanText(patch.name, 32);
+      if (cleanName) m.name = cleanName;
+    }
+    if (patch.role !== undefined) {
+      m.role = cleanText(patch.role, 32) ?? 'AI 伙伴';
+    }
+    if (patch.look === 'f' || patch.look === 'm') {
+      m.look = patch.look;
+    }
+    const parsedSeed = parseSeed(patch.seed);
+    if (parsedSeed !== null) {
+      m.seed = parsedSeed;
+    }
+    if (patch.parts !== undefined) {
+      const parsedParts = parseAppearanceParts(patch.parts);
+      if (parsedParts && Object.keys(parsedParts).length > 0) {
+        m.parts = parsedParts;
+      }
+    }
+
+    m.avatarMode = 'human';
+    delete m.petId;
+    m.canDuel = typeof m.canDuel === 'boolean' ? m.canDuel : false;
+    m.custom = true;
+    m.lastSeenAt = now;
+
+    const compId = `${m.id}:pet`;
+    const existingComp = this.members.get(compId);
+    if (patch.companionPetId === null || patch.companionPetId === '') {
+      this.members.delete(compId);
+    } else if (typeof patch.companionPetId === 'string') {
+      const cleanPet = sanitizePetId(patch.companionPetId);
+      const pet = cleanPet ? this.pets.getPet(cleanPet) : undefined;
+      if (cleanPet && pet) {
+        if (existingComp) {
+          existingComp.ownerId = m.id;
+          existingComp.petId = cleanPet;
+          existingComp.avatarMode = 'pet';
+          existingComp.canDuel = defaultCanDuel('pet', cleanPet, pet);
+          existingComp.name = formatCompanionName(m.name, pet.displayName, patch.companionPetName);
+          existingComp.role = `${m.name}的伙伴`;
+          existingComp.custom = true;
+          existingComp.lastStatus = m.lastStatus === 'offline' ? 'offline' : 'idle';
+          existingComp.statusSince = now;
+          existingComp.lastSeenAt = now;
+        } else {
+          this.members.set(compId, {
+            id: compId,
+            ownerId: m.id,
+            name: formatCompanionName(m.name, pet.displayName, patch.companionPetName),
+            role: `${m.name}的伙伴`,
+            seed: hash32(compId),
+            look: 'f',
+            custom: true,
+            avatarMode: 'pet',
+            petId: cleanPet,
+            canDuel: defaultCanDuel('pet', cleanPet, pet),
+            agentTool: '桌宠',
+            lastStatus: m.lastStatus === 'offline' ? 'offline' : 'idle',
+            statusSince: now,
+            lastSeenAt: now,
+            joinedAt: m.joinedAt + 1,
+            sessions: {},
+          });
+        }
+      }
+    } else if (existingComp) {
+      const curPet = existingComp.petId ? this.pets.getPet(existingComp.petId) : undefined;
+      const oldPrefix = `${oldName}的`;
+      const shortName = existingComp.name.startsWith(oldPrefix)
+        ? existingComp.name.slice(oldPrefix.length)
+        : undefined;
+      existingComp.name = formatCompanionName(m.name, curPet?.displayName, shortName);
+      existingComp.role = `${m.name}的伙伴`;
+      existingComp.custom = true;
+      existingComp.lastSeenAt = now;
+    }
+
+    this.emit();
+    return this.getMemberByEditToken(m.editToken!);
   }
 
   // ------------------------------------------------------------------ Admin controls

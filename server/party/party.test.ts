@@ -1032,4 +1032,92 @@ describe('Pokémon Duel Arena layout, lifecycle & leaderboard persistence', () =
     expect(renderCustomizeHtml('https://agent.ipil.space')).toContain('像素小人捏脸工坊');
     expect(renderReportScript('https://agent.ipil.space')).toContain('--appearance');
   });
+
+  it('assigns unique ap_... customize codes, resolves full profile by code/URL, and persists customize updates against stale heartbeats', () => {
+    const dir = makeTempDir();
+    const pets = new PetRegistry(dir, null, null, join(process.cwd(), 'assets', 'default-pets'));
+    const store = new PartyStore({ dataDir: dir, pets });
+    const t0 = Date.UTC(2026, 5, 1, 12, 0, 0);
+
+    const r1 = store.report(
+      {
+        id: 'alice',
+        name: 'Alice',
+        role: '后端开发',
+        status: 'idle',
+        companionPetId: 'snorlax',
+        companionPetName: '卡比兽',
+        agentTool: 'Codex',
+      },
+      t0,
+    );
+    expect(r1.ok).toBe(true);
+    if (!r1.ok) return;
+    const token = r1.member.editToken!;
+    expect(token).toMatch(/^ap_[A-Za-z0-9]{12}$/);
+
+    // Same token resolves from raw code or full URL
+    const foundByCode = store.getMemberByEditToken(token);
+    expect(foundByCode.ok).toBe(true);
+    if (!foundByCode.ok) return;
+    expect(foundByCode.member.name).toBe('Alice');
+    expect(foundByCode.companionPetId).toBe('snorlax');
+    expect(foundByCode.companionPetName).toBe('卡比兽');
+    expect(foundByCode.resolvedParts.hairStyle).toBeTruthy();
+
+    const foundByUrl = store.getMemberByEditToken(`https://agent.ipil.space/customize/${token}`);
+    expect(foundByUrl.ok).toBe(true);
+    expect(store.getMemberByEditToken('ap_notexists999')).toEqual({
+      ok: false,
+      statusCode: 404,
+      error: '未找到该专属代码对应的成员，请确认代码是否正确（需先通过 AI 助手完成首次接入）。',
+    });
+
+    // Update name, role, look, hair, and remove companion via exclusive token
+    const updated = store.updateMemberByEditToken(
+      token,
+      {
+        name: 'Alice改',
+        role: '架构师',
+        look: 'f',
+        parts: { hairStyle: 'ponytail', topStyle: 'jacket', top: '#2f3b55' },
+        companionPetId: null,
+      },
+      t0 + 1000,
+    );
+    expect(updated.ok).toBe(true);
+    if (!updated.ok) return;
+    expect(updated.member.name).toBe('Alice改');
+    expect(updated.member.role).toBe('架构师');
+    expect(updated.member.look).toBe('f');
+    expect(updated.resolvedParts.hairStyle).toBe('ponytail');
+    expect(updated.companionPetId).toBeUndefined();
+
+    // Subsequent stale heartbeat from report.mjs must NOT revert name, role, or re-create deleted companion
+    store.report(
+      {
+        id: 'alice',
+        name: 'Alice',
+        role: '后端开发',
+        status: 'working',
+        companionPetId: 'snorlax',
+        companionPetName: '卡比兽',
+        customizeCode: token,
+      },
+      t0 + 2000,
+    );
+    const snap = store.toSnapshot(t0 + 2000);
+    const alice = snap.agents.find((a) => a.id === 'alice');
+    expect(alice?.name).toBe('Alice改');
+    expect(alice?.role).toBe('架构师');
+    expect(alice?.status).toBe('working');
+    expect(snap.agents.find((a) => a.id === 'alice:pet')).toBeUndefined();
+
+    const customHtml = renderCustomizeHtml('https://agent.ipil.space', token);
+    expect(customHtml).toContain(token);
+    const scriptMatch = /<script>([\s\S]*?)<\/script>/.exec(customHtml);
+    expect(scriptMatch).toBeTruthy();
+    expect(() => new Function(scriptMatch![1])).not.toThrow();
+    expect(renderReportScript('https://agent.ipil.space')).toContain('customizeCode');
+  });
 });

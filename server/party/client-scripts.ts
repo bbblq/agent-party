@@ -147,6 +147,7 @@ async function main() {
     role: cfg.role || 'AI 伙伴',
     status,
     sessionId,
+    ...(cfg.customizeCode ? { customizeCode: cfg.customizeCode } : {}),
     ...(cfg.look === 'f' || cfg.look === 'm' ? { look: cfg.look } : {}),
     ...(typeof cfg.seed === 'number' ? { seed: cfg.seed >>> 0 } : {}),
     ...(cfg.parts && typeof cfg.parts === 'object' ? { parts: cfg.parts } : {}),
@@ -168,7 +169,7 @@ async function main() {
       signal: ctrl.signal,
     });
     clearTimeout(timeout);
-    const bodyText = verify ? await res.text() : '';
+    const bodyText = await res.text();
     if (!res.ok) {
       if (verify) {
         console.error('❌ 服务端返回 HTTP ' + res.status + ': ' + bodyText);
@@ -176,11 +177,24 @@ async function main() {
       }
       return;
     }
+    let parsed = {};
+    try { parsed = JSON.parse(bodyText); } catch {}
+    if (parsed && parsed.customizeCode && parsed.customizeCode !== cfg.customizeCode) {
+      try {
+        cfg.customizeCode = String(parsed.customizeCode);
+        if (parsed.customizeUrl) cfg.customizeUrl = String(parsed.customizeUrl);
+        mkdirSync(DIR, { recursive: true });
+        writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
+      } catch {}
+    }
     if (verify) {
-      let parsed = {};
-      try { parsed = JSON.parse(bodyText); } catch {}
       const compMsg = parsed.companion && parsed.companion.name ? (' + 伴随宠物「' + parsed.companion.name + '」') : '';
       console.log('✅ Agent Party 接入成功 (HTTP 200): ' + (parsed.name || id) + compMsg + ' [' + (parsed.status || status) + '] -> ' + serverUrl);
+      if (parsed.customizeCode) {
+        const custUrl = parsed.customizeUrl || (serverUrl + '/customize/' + parsed.customizeCode);
+        console.log('🔑 专属后台代码: ' + parsed.customizeCode);
+        console.log('🎨 专属捏脸页面: ' + custUrl);
+      }
     }
   } catch (err) {
     if (verify) {
