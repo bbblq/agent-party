@@ -99,7 +99,8 @@ export type SpotKind =
   | 'talk'
   | 'watch' // ponto em pé da torcida (assistir a uma partida)
   | 'arena_fight' // ringue da batalha Pokémon
-  | 'arena_watch'; // arquibancada/beira do ringue Pokémon
+  | 'arena_watch' // arquibancada/beira do ringue Pokémon
+  | 'spawn'; // ponto de entrada/saída em mapas customizados sem elevador
 
 /**
  * Ponto de interesse. O personagem anda até o tile de aproximação (tx, ty), caminhável,
@@ -127,6 +128,9 @@ export interface SpotDef {
   rank?: number;
   /** Lado da ilha: 'S' = de costas (tela visível), 'N' = de frente (desk_back). */
   side?: 'S' | 'N';
+  /** Future extensibility hooks for per-member seat binding. */
+  reservedFor?: string;
+  tags?: string[];
 }
 
 export interface AreaLayout {

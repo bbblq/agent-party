@@ -4,6 +4,7 @@ import type { AppearanceParts } from '../../../../shared/appearance';
 import type { AgentInfo, OfficeSnapshot, RoomInfo, ShellJob } from '../../../../shared/types';
 import type { Appearance, ArtModule, RoomTheme } from '../../art/api';
 import { DEFAULT_WORLD_OPTIONS } from '../api';
+import { createBlankCustomMap } from '../../../../shared/map';
 import type { Character } from './character';
 import { SHELL_DONE_TOOL, Sim } from './sim';
 
@@ -762,5 +763,32 @@ describe('espera de shell', () => {
     expect(ana.mode).toBe('shell');
     expect(ana.shellCount).toBe(1);
     expect(ana.pose).toBe('wait');
+  });
+
+  it('custom map without elevator spawns via entrance_mat, seats at 4-way desks, and leaves cleanly', () => {
+    const sim = newSim();
+    const clock = { now: T0 };
+    const doc = createBlankCustomMap('无电梯自建地图', 48, 36, 'custom-no-elev');
+    sim.setCustomMap(doc, clock.now);
+    expect(sim.elevators).toHaveLength(0);
+    expect(sim.spots.ofKind('spawn').length).toBeGreaterThanOrEqual(1);
+
+    sim.applySnapshot(
+      snap(
+        [{ id: 'zone-main', name: '主办公大厅', path: '/custom/zone-main', slot: 0, seed: 42, createdAt: T0 }],
+        [agent('alice', 'zone-main', 'working', { preferredZoneId: 'zone-main' })],
+      ),
+      clock.now,
+    );
+    const alice = sim.chars.get('alice')!;
+    expect(alice).toBeDefined();
+    run(sim, clock, 12);
+    expect(alice.seated).toBe(true);
+    expect(['up', 'down', 'left', 'right']).toContain(alice.dir);
+
+    // Leaving should walk to entrance spawn point and disappear cleanly without throwing
+    sim.applySnapshot(snap([{ id: 'zone-main', name: '主办公大厅', path: '/custom/zone-main', slot: 0, seed: 42, createdAt: T0 }], [], 2), clock.now);
+    run(sim, clock, 15);
+    expect(sim.chars.has('alice')).toBe(false);
   });
 });

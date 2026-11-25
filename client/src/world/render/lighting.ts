@@ -150,6 +150,7 @@ export class Lighting {
   private mapKey = '';
   private mapX = 0;
   private mapY = 0;
+  private mapScale = MAP_SCALE;
   /** Luz por presença das áreas comuns (0 = penumbra, 1 = acesa), com transição. */
   private coreLevel = new Map<string, number>();
   private coreBusy = new Map<string, boolean>();
@@ -206,19 +207,20 @@ export class Lighting {
     if (isNeutral(amb)) return;
     const map = this.ensureMap(scene, now);
     if (!map) return;
+    const scale = this.mapScale;
     const mx0 = this.mapX;
     const my0 = this.mapY;
-    const mx1 = mx0 + map.width * MAP_SCALE;
-    const my1 = my0 + map.height * MAP_SCALE;
+    const mx1 = mx0 + map.width * scale;
+    const my1 = my0 + map.height * scale;
     ctx.save();
     ctx.globalCompositeOperation = 'multiply';
     // parte visível do mapa (em pixels inteiros do mapa)
-    const sx = Math.max(0, Math.floor((view.x0 - mx0) / MAP_SCALE) - 1);
-    const sy = Math.max(0, Math.floor((view.y0 - my0) / MAP_SCALE) - 1);
-    const ex = Math.min(map.width, Math.ceil((view.x1 - mx0) / MAP_SCALE) + 1);
-    const ey = Math.min(map.height, Math.ceil((view.y1 - my0) / MAP_SCALE) + 1);
+    const sx = Math.max(0, Math.floor((view.x0 - mx0) / scale) - 1);
+    const sy = Math.max(0, Math.floor((view.y0 - my0) / scale) - 1);
+    const ex = Math.min(map.width, Math.ceil((view.x1 - mx0) / scale) + 1);
+    const ey = Math.min(map.height, Math.ceil((view.y1 - my0) / scale) + 1);
     // sem suavização: pixels nítidos como o resto da arte (e bem mais barato de ampliar)
-    if (ex > sx && ey > sy) ctx.drawImage(map, sx, sy, ex - sx, ey - sy, mx0 + sx * MAP_SCALE, my0 + sy * MAP_SCALE, (ex - sx) * MAP_SCALE, (ey - sy) * MAP_SCALE);
+    if (ex > sx && ey > sy) ctx.drawImage(map, sx, sy, ex - sx, ey - sy, mx0 + sx * scale, my0 + sy * scale, (ex - sx) * scale, (ey - sy) * scale);
     // além do mapa: o mesmo tom do exterior
     ctx.fillStyle = rgbCss(amb.outside);
     const w = view.x1 - view.x0 + 4;
@@ -292,8 +294,11 @@ export class Lighting {
 
   private ensureMap(scene: LightScene, now: number): HTMLCanvasElement | null {
     const b = scene.exterior.bounds;
-    const w = Math.ceil((b.w * TILE) / MAP_SCALE);
-    const h = Math.ceil((b.h * TILE) / MAP_SCALE);
+    const maxDim = this.sim.building.custom ? 1024 : 2048;
+    const scale = Math.max(MAP_SCALE, Math.ceil((Math.max(b.w, b.h) * TILE) / maxDim));
+    this.mapScale = scale;
+    const w = Math.max(1, Math.ceil((b.w * TILE) / scale));
+    const h = Math.max(1, Math.ceil((b.h * TILE) / scale));
     if (!this.map || this.map.width !== w || this.map.height !== h) {
       try {
         this.map = document.createElement('canvas');
@@ -320,7 +325,9 @@ export class Lighting {
   /** Tudo o que muda o mapa, em passos discretos (evita refazê-lo a cada frame). */
   private lightKey(scene: LightScene, now: number): string {
     const a = this.ambient;
-    let k = `${Math.round(a.night * 200)}|${a.outside.join(',')}|${a.inside.join(',')}|${a.dim.join(',')}|${this.sim.building.cols}`;
+    const b = scene.exterior.bounds;
+    const dimKey = this.sim.building.custom ? `c:${this.sim.layoutVersion}:${b.w}x${b.h}` : `${this.sim.building.cols}`;
+    let k = `${Math.round(a.night * 200)}|${a.outside.join(',')}|${a.inside.join(',')}|${a.dim.join(',')}|${dimKey}`;
     for (const vis of scene.areas.values()) {
       const { lit, cover } = this.areaLight(vis, now);
       k += `|${vis.id}:${Math.round(lit * 24)}:${Math.round(cover * 20)}`;
@@ -332,14 +339,26 @@ export class Lighting {
   private paintMap(m: CanvasRenderingContext2D, scene: LightScene, now: number): void {
     const amb = this.ambient;
     const n = amb.night;
+    const scale = this.mapScale;
     m.setTransform(1, 0, 0, 1, 0, 0);
     m.globalCompositeOperation = 'source-over';
     m.globalAlpha = 1;
     m.fillStyle = rgbCss(amb.outside);
     m.fillRect(0, 0, this.map!.width, this.map!.height);
     // daqui em diante, coordenadas de mundo
-    m.setTransform(1 / MAP_SCALE, 0, 0, 1 / MAP_SCALE, -this.mapX / MAP_SCALE, -this.mapY / MAP_SCALE);
+    m.setTransform(1 / scale, 0, 0, 1 / scale, -this.mapX / scale, -this.mapY / scale);
     const corridorLit = rgbCss(mixRgb(amb.inside, amb.dim, 0.18));
+    // Em mapas customizados, pisos internos do common recebem luz interior
+    if (this.sim.building.custom) {
+      const commonVis = scene.areas.get('custom:common');
+      if (commonVis) {
+        m.fillStyle = corridorLit;
+        for (const f of commonVis.layout.floors) {
+          if (f.kind === 'grass' || f.kind === 'sidewalk' || f.kind === 'street') continue;
+          m.fillRect(f.x, f.y, f.w, f.h);
+        }
+      }
+    }
     // fechamentos do corredor nos slots vazios (fachada com janelas ao norte, mureta ao sul)
     for (const sh of scene.shells) {
       if (scene.roomInSlot(sh.slot)) continue;
@@ -350,6 +369,10 @@ export class Lighting {
     }
     const lit = new Map<AreaVis, number>();
     for (const vis of scene.areas.values()) {
+      if (this.sim.building.custom && vis.id === 'custom:common') {
+        lit.set(vis, 0.6);
+        continue;
+      }
       const l = this.areaLight(vis, now);
       if (l.cover <= 0.01) continue;
       // quanto de luz a área "irradia" (janelas): salas pela luz, áreas comuns vazias na penumbra
@@ -425,6 +448,7 @@ export class Lighting {
     halo: (img: HTMLCanvasElement, cx: number, cy: number, w: number, h: number, a: number) => void,
     warm: HTMLCanvasElement,
   ): void {
+    if (this.sim.building.custom) return;
     const bw = this.sim.building.cols * COL_W * TILE;
     const bh = BUILDING_H * TILE;
     for (const [vis, l] of lit) {
@@ -469,7 +493,7 @@ export class Lighting {
       if (k < 0.2) continue;
       for (const f of vis.furniture) {
         if (!inView(f.ax, f.ay, 40)) continue;
-        if (f.kind === 'desk' || f.kind === 'desk_back') {
+        if (f.kind === 'desk' || f.kind === 'desk_back' || f.kind === 'desk_east' || f.kind === 'desk_west') {
           const mode = scene.deskScreen(f, vis);
           if (mode === 'off') continue;
           // quem trabalha à noite fica com o rosto iluminado pela tela

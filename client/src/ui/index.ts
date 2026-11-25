@@ -46,6 +46,8 @@ import { worldSectionMode } from './world/world-model';
 import { SceneSwitch, type CitySceneHost } from './world/scene-switch';
 import { worldSource } from '../net/world';
 import { FreeArea } from './viewport';
+import { Minimap } from './minimap';
+import { MapEditor, attachStudioQueryMode } from './map-editor/map-editor';
 import { tr } from '../../../shared/i18n';
 
 /** Relógio dos tempos relativos ("há 5 s"). */
@@ -297,10 +299,15 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   const tip = new HoverTip(ctx);
   const splash = new Splash(ctx);
   timelapse = new TimelapsePlayer(ctx);
+  const minimap = new Minimap(world, store);
+  const mapEditor = new MapEditor(ctx, world);
+  topbar.mapStudioBtn.addEventListener('click', () => {
+    void mapEditor.toggle();
+  });
   const scrim = h('div', { class: 'ui-scrim', attrs: { 'aria-hidden': 'true' }, on: { click: () => ctx.togglePanel('sidebar', false) } });
 
   root.classList.add('ui-root');
-  root.append(timelapse.vignette, topbar.el, sidebar.el, scrim, feed.el, drawer.el, terminal.el, pty.el, timelapse.el, timelapse.badge, toasts.el, banner.el, empty.el, tip.el, settings.el, help.el, renamer.el, live, splash.el);
+  root.append(timelapse.vignette, topbar.el, sidebar.el, scrim, feed.el, drawer.el, terminal.el, pty.el, timelapse.el, timelapse.badge, minimap.el, mapEditor.reviewFloatEl, mapEditor.el, toasts.el, banner.el, empty.el, tip.el, settings.el, help.el, renamer.el, live, splash.el);
   area = new FreeArea(world, { root, topbar: topbar.el, sidebar: sidebar.el, drawer: drawer.el, feed: feed.el }, () => ({
     sidebar: panels.sidebar,
     feed: panels.feed,
@@ -309,7 +316,8 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   }));
   drawer.onLayoutChange = () => applyLayout();
 
-  const components: UiComponent[] = [topbar, sidebar, drawer, toasts, settings, empty, banner, tip, notifier, splash, sound];
+  const components: UiComponent[] = [topbar, sidebar, drawer, toasts, settings, empty, banner, tip, notifier, splash, sound, minimap];
+  attachStudioQueryMode(mapEditor, ctx);
 
   // ---------------------------------------------------------------- renderização agrupada por quadro
   let rafId = 0;

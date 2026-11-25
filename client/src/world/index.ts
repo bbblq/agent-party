@@ -3,7 +3,8 @@
 import * as artModule from '../art';
 import { TILE, type ArtModule } from '../art/api';
 import type { OfficeStore } from '../net/store';
-import { DEFAULT_WORLD_OPTIONS, seasonalThemeFor, type Selection, type SocialEvent, type SoundCue, type WorldApi, type WorldOptions, type WorldPlayback } from './api';
+import { DEFAULT_WORLD_OPTIONS, seasonalThemeFor, type Selection, type SocialEvent, type SoundCue, type WorldApi, type WorldEditorBridge, type WorldOptions, type WorldPlayback } from './api';
+import type { CustomMapDocument } from '../../../shared/map';
 import { loadWorldAssets, type WorldAssets } from './assets';
 import { Camera, overviewFrame } from './camera';
 import { createDebug, type WorldDebug } from './debug';
@@ -67,6 +68,7 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
   const socialCbs = new Set<(e: SocialEvent) => void>();
   const soundCbs = new Set<(c: SoundCue) => void>();
   const roomMenuCbs = new Set<(roomId: string, at: { x: number; y: number }) => void>();
+  const afterFrameCbs = new Set<(ctx: CanvasRenderingContext2D, view: { zoom: number; ox: number; oy: number; dpr: number }) => void>();
   let cues = new SoundCues(sim, camera);
   let selection: Selection = null;
   let hover: string | null = null;
@@ -80,6 +82,13 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
   let userMoved = false;
   let framed = false;
   let lastCols = -1;
+  let lastLayoutVer = -1;
+  let previewLocked = false;
+  let lastSyncedMapRev = -1;
+  let fetchingMapRev = -1;
+  let pointerIntercept:
+    | ((ev: PointerEvent, kind: 'down' | 'move' | 'up', tile: { tx: number; ty: number; wx: number; wy: number }) => boolean)
+    | null = null;
   const abort = new AbortController();
 
   // ------------------------------------------------------------------ tamanho/DPR
@@ -98,13 +107,18 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
     updateBounds();
   };
 
-  const buildingRect = () => ({ x: 0, y: 0, w: sim.building.cols * COL_W * TILE, h: BUILDING_H * TILE });
+  const buildingRect = () => ({
+    x: 0,
+    y: 0,
+    w: (sim.building.custom ? (sim.building.mapWidth ?? sim.building.rect?.w ?? sim.building.cols * COL_W) : sim.building.cols * COL_W) * TILE,
+    h: (sim.building.custom ? (sim.building.mapHeight ?? sim.building.rect?.h ?? BUILDING_H) : BUILDING_H) * TILE,
+  });
 
   const updateBounds = () => {
     const b = buildingRect();
     camera.bounds = { x: b.x - 7 * TILE, y: b.y - 6 * TILE, w: b.w + 14 * TILE, h: b.h + 18 * TILE };
     const fit = camera.fitZoom(b, 16);
-    camera.minZoom = Math.min(1, Math.max(0.25, fit));
+    camera.minZoom = Math.min(1, Math.max(sim.building.custom ? 0.05 : 0.25, fit));
     camera.clamp();
   };
 
@@ -246,9 +260,38 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
 
   // ------------------------------------------------------------------ dados
 
+  const syncActiveCustomMap = (snap: NonNullable<typeof store.snapshot>) => {
+    if (previewLocked || visitMode) return;
+    const mode = snap.meta?.mapMode;
+    const rev = snap.meta?.customMapRev ?? 0;
+    if (mode === 'custom') {
+      if ((rev !== lastSyncedMapRev || !sim.customMap) && fetchingMapRev !== rev && typeof fetch === 'function') {
+        fetchingMapRev = rev;
+        void fetch('/api/map')
+          .then((res) => (res.ok ? res.json() : null))
+          .then((data: { mode?: string; rev?: number; map?: CustomMapDocument | null } | null) => {
+            if (previewLocked || abort.signal.aborted) return;
+            if (data?.mode === 'custom' && data.map) {
+              lastSyncedMapRev = data.rev ?? rev;
+              sim.setCustomMap(data.map, playback ? worldNow : Date.now());
+              if (store.snapshot) sim.applySnapshot(store.snapshot, playback ? worldNow : Date.now());
+            }
+          })
+          .catch(() => {})
+          .finally(() => {
+            if (fetchingMapRev === rev) fetchingMapRev = -1;
+          });
+      }
+    } else if (sim.customMap !== null) {
+      lastSyncedMapRev = rev;
+      sim.setCustomMap(null, playback ? worldNow : Date.now());
+    }
+  };
+
   const onSnapshot = () => {
     const snap = store.snapshot;
     if (!snap) return;
+    syncActiveCustomMap(snap);
     try {
       // No timelapse, os horários do snapshot vão para o relógio do mundo (world/playback.ts).
       if (playback) sim.applySnapshot(rebaseSnapshot(snap, worldNow - snap.serverTime), worldNow);
@@ -301,13 +344,14 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
         events.length = 0;
       }
       renderer.sync(seasonalThemeFor(options.theme, new Date()));
-      if (sim.building.cols !== lastCols) {
+      if (sim.building.cols !== lastCols || sim.layoutVersion !== lastLayoutVer) {
         lastCols = sim.building.cols;
+        lastLayoutVer = sim.layoutVersion;
         updateBounds();
         if (!framed && sim.initialized) {
           overview(false);
           framed = true;
-        } else if (!userMoved) overview(true);
+        } else if (!userMoved && !previewLocked) overview(true);
       }
       // visita: andando pelo teclado, a câmera vai junto
       if (visitMode && sim.visitor && (sim.visitorIntent.dx || sim.visitorIntent.dy) && camera.follow !== VISITOR_ID) followVisitor();
@@ -316,6 +360,14 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
       camera.update(real, followCh ? camera.centerFor(followCh.x, followCh.y - 12, camera.zoom) : null, realDt);
       renderer.frame(now, dt, options, { agent: selection?.type === 'agent' ? selection.id : null, room: selection?.type === 'room' ? selection.id : null, hover });
       overlay.draw(now, options, { agent: selection?.type === 'agent' ? selection.id : null, room: selection?.type === 'room' ? selection.id : null, hover });
+      if (afterFrameCbs.size) {
+        const t = camera.transform();
+        const ctx = renderer.ctx;
+        ctx.save();
+        ctx.setTransform(t.scale, 0, 0, t.scale, t.ox, t.oy);
+        for (const cb of afterFrameCbs) cb(ctx, { zoom: camera.zoom, ox: t.ox, oy: t.oy, dpr: camera.dpr });
+        ctx.restore();
+      }
       renderer.pruneHeads();
       // No timelapse o mundo fica mudo: o teclado e o elevador em alta velocidade só fariam barulho.
       if (soundCbs.size && !playback) cues.update(now, (c) => soundCbs.forEach((cb) => cb(c)));
@@ -364,10 +416,88 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
     roomMenuCbs.forEach((cb) => cb(roomId, { x: e.clientX, y: e.clientY }));
   };
   canvas.addEventListener('contextmenu', onContextMenu);
+
+  const screenToTile = (clientX: number, clientY: number) => {
+    const r = canvas.getBoundingClientRect();
+    const w = camera.screenToWorld(clientX - r.left, clientY - r.top);
+    return { tx: Math.floor(w.x / TILE), ty: Math.floor(w.y / TILE), wx: w.x, wy: w.y };
+  };
+
+  const makePointerProxy = (kind: 'down' | 'move' | 'up') => (ev: PointerEvent) => {
+    if (!pointerIntercept) return;
+    const hit = pointerIntercept(ev, kind, screenToTile(ev.clientX, ev.clientY));
+    if (hit) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+  };
+  const onInterceptDown = makePointerProxy('down');
+  const onInterceptMove = makePointerProxy('move');
+  const onInterceptUp = makePointerProxy('up');
+  canvas.addEventListener('pointerdown', onInterceptDown, { capture: true });
+  canvas.addEventListener('pointermove', onInterceptMove, { capture: true });
+  canvas.addEventListener('pointerup', onInterceptUp, { capture: true });
+
   window.addEventListener('resize', resize);
   document.addEventListener('visibilitychange', onVisibility);
   resize();
   raf = requestAnimationFrame(loop);
+
+  const editorBridge: WorldEditorBridge = {
+    setCustomMapPreview: (doc, opts) => {
+      if (opts?.lockLiveSync !== undefined) previewLocked = opts.lockLiveSync;
+      sim.setCustomMap(doc, playback ? worldNow : Date.now());
+      if (store.snapshot) {
+        try {
+          sim.applySnapshot(store.snapshot, playback ? worldNow : Date.now());
+        } catch {
+          // ignore snapshot error during preview
+        }
+      }
+      if (doc === null && opts?.lockLiveSync === false && store.snapshot) {
+        lastSyncedMapRev = -1;
+        syncActiveCustomMap(store.snapshot);
+      }
+      updateBounds();
+    },
+    getCustomMap: () => sim.customMap,
+    invalidateRect: (tileRect) => {
+      renderer.invalidateCustomRect(tileRect);
+    },
+    getOverviewCanvas: () => renderer.getOverviewCanvas(),
+    getMapBounds: () => ({
+      w: sim.building.custom ? (sim.building.mapWidth ?? sim.building.rect?.w ?? sim.building.cols * COL_W) : sim.building.cols * COL_W,
+      h: sim.building.custom ? (sim.building.mapHeight ?? sim.building.rect?.h ?? BUILDING_H) : BUILDING_H,
+      custom: !!sim.building.custom,
+    }),
+    getViewportWorldRect: () => {
+      const tl = camera.screenToWorld(0, 0);
+      const br = camera.screenToWorld(camera.viewW, camera.viewH);
+      return { x: tl.x, y: tl.y, w: br.x - tl.x, h: br.y - tl.y, zoom: camera.zoom };
+    },
+    panToWorld: (wx, wy) => {
+      userMoved = true;
+      camera.follow = null;
+      camera.stop();
+      const c = camera.centerFor(wx, wy, camera.zoom);
+      camera.x = c.x;
+      camera.y = c.y;
+      camera.clamp();
+    },
+    screenToTile,
+    worldToScreen: (wx, wy) => {
+      const p = camera.worldToScreen(wx, wy);
+      return { x: p.x, y: p.y, zoom: camera.zoom };
+    },
+    setPointerIntercept: (fn) => {
+      pointerIntercept = fn;
+    },
+    isWalkable: (tx, ty) => sim.building.grid.get(tx, ty),
+    onAfterFrame: (cb) => {
+      afterFrameCbs.add(cb);
+      return () => void afterFrameCbs.delete(cb);
+    },
+  };
 
   // ------------------------------------------------------------------ depuração
 
@@ -394,6 +524,7 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
     debug = createDebug(sim, renderer, camera, markMoved);
     cues = new SoundCues(sim, camera);
     lastCols = -1;
+    lastLayoutVer = -1;
     setHover(null);
   };
 
@@ -484,12 +615,17 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
       detachInput();
       window.removeEventListener('resize', resize);
       canvas.removeEventListener('contextmenu', onContextMenu);
+      canvas.removeEventListener('pointerdown', onInterceptDown, { capture: true });
+      canvas.removeEventListener('pointermove', onInterceptMove, { capture: true });
+      canvas.removeEventListener('pointerup', onInterceptUp, { capture: true });
       document.removeEventListener('visibilitychange', onVisibility);
       selectCbs.clear();
       hoverCbs.clear();
       socialCbs.clear();
       soundCbs.clear();
+      afterFrameCbs.clear();
     },
+    editor: editorBridge,
     get debug() {
       return debug;
     },

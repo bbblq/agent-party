@@ -13,12 +13,15 @@ import { renderAdminHtml } from './party/admin-page';
 import { renderReportScript, renderWatchScript } from './party/client-scripts';
 import { renderCustomizeHtml } from './party/customize-page';
 import { OfficeFeedTracker } from './party/feed';
+import { MapManager } from './party/map-manager';
+import { handleMcpRpc, renderMapMcpScript, resolveMcpAuth } from './party/mcp-server';
 import { parseBoundary, parseMultipart } from './party/multipart';
 import { MAX_PET_SPRITE_BYTES, PetRegistry } from './party/pets';
 import { PokemonService, searchPokemon } from './party/pokemon';
 import { renderSetupHtml, renderSetupMarkdown } from './party/setup-page';
 import { PartyStore, type ReportInput } from './party/store';
 import { WorldSync } from './party/world-sync';
+import { validateMapPlayability } from '../shared/map';
 
 const isDev = process.argv.includes('--dev');
 const port = Number(process.env.PORT || process.env.HABBLAUD_PORT || 4747);
@@ -52,10 +55,12 @@ function loadOrCreateAdminKey(): string {
 const adminKey = loadOrCreateAdminKey();
 const pokemon = new PokemonService(dataDir);
 const pets = new PetRegistry(dataDir, undefined, pokemon, join(rootDir, 'assets', 'default-pets'));
-const store = new PartyStore({ dataDir, pets });
+const mapManager = new MapManager(dataDir);
+const store = new PartyStore({ dataDir, pets, mapManager });
 const worldSync = new WorldSync(store.toSnapshot(), {
   initialLeaderboard: store.getArenaLeaderboard(),
   initialPrevChampion: store.getPrevArenaChampion(),
+  initialCustomMap: mapManager.getActiveDoc(),
   onArenaResult: (wId, wName, lId, lName, now) => {
     store.recordArenaResult(wId, wName, lId, lName, now);
   },
@@ -65,6 +70,11 @@ const worldSync = new WorldSync(store.toSnapshot(), {
 });
 worldSync.start(250);
 const feedTracker = new OfficeFeedTracker(store.toSnapshot(), worldSync.getArenaEvent());
+
+mapManager.onActiveChange(() => {
+  worldSync.setCustomMap(mapManager.getActiveDoc());
+  store.notifyMapChange();
+});
 
 const sseClients = new Set<http.ServerResponse>();
 
@@ -157,8 +167,8 @@ async function readBody(req: http.IncomingMessage, maxBytes = MAX_PET_SPRITE_BYT
   return Buffer.concat(chunks);
 }
 
-async function readJson<T = Record<string, unknown>>(req: http.IncomingMessage): Promise<T> {
-  const buf = await readBody(req, 512 * 1024);
+async function readJson<T = Record<string, unknown>>(req: http.IncomingMessage, maxBytes = 512 * 1024): Promise<T> {
+  const buf = await readBody(req, maxBytes);
   if (!buf.length) return {} as T;
   return JSON.parse(buf.toString('utf8')) as T;
 }
@@ -612,6 +622,206 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     sendText(res, 200, renderWatchScript(getBaseUrl(req)), 'text/javascript; charset=utf-8');
     return true;
   }
+  if (method === 'GET' && p === '/client-scripts/map-mcp.mjs') {
+    sendText(res, 200, renderMapMcpScript(getBaseUrl(req)), 'text/javascript; charset=utf-8');
+    return true;
+  }
+
+  // ---- Public Active Map & Workshop Studio Sessions + Built-in MCP
+  if (method === 'GET' && p === '/api/map') {
+    sendJson(res, 200, mapManager.getPublicState());
+    return true;
+  }
+
+  if (method === 'POST' && p === '/api/map/studio/session') {
+    const body = await readJson<{ doc?: unknown; resumeToken?: string }>(req, 8 * 1024 * 1024);
+    const session = mapManager.createSession(body);
+    sendJson(res, 201, {
+      sessionId: session.sessionId,
+      studioToken: session.studioToken,
+      rev: session.rev,
+      doc: session.doc,
+      selection: session.selection,
+      tasks: mapManager.getTaskSummaries(session.sessionId),
+      presence: mapManager.getMcpPresence(session.sessionId),
+      summary: validateMapPlayability(session.doc),
+    });
+    return true;
+  }
+
+  if (method === 'POST' && p === '/api/map/studio/heartbeat') {
+    const authHeader = typeof req.headers.authorization === 'string' ? req.headers.authorization : '';
+    const bearer = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : '';
+    const token = (typeof req.headers['x-studio-token'] === 'string' ? req.headers['x-studio-token'].trim() : '')
+      || bearer
+      || (url.searchParams.get('token')?.trim() ?? '');
+    const session = token.startsWith('ws_') ? mapManager.getSessionByToken(token) : null;
+    if (!session) {
+      sendJson(res, 401, { error: 'Unauthorized studio session token' });
+      return true;
+    }
+    const body = await readJson<{ clientName?: string; transport?: 'http' | 'stdio' }>(req, 32 * 1024);
+    const presence = mapManager.touchMcpPresence(session.sessionId, {
+      clientName: typeof body.clientName === 'string' ? body.clientName : undefined,
+      transport: body.transport === 'stdio' ? 'stdio' : 'http',
+    });
+    sendJson(res, 200, { ok: true, presence });
+    return true;
+  }
+
+  if (p.startsWith('/api/map/studio/')) {
+    const m = /^\/api\/map\/studio\/([^/]+)(?:\/(.*))?$/.exec(p);
+    if (!m) {
+      sendJson(res, 404, { error: 'Invalid studio path' });
+      return true;
+    }
+    const sid = decodeURIComponent(m[1]);
+    const sub = m[2] ?? '';
+    const session = mapManager.getSession(sid);
+    if (!session) {
+      sendJson(res, 404, { error: 'Studio 会话不存在或已过期。' });
+      return true;
+    }
+    const authHeader = typeof req.headers.authorization === 'string' ? req.headers.authorization : '';
+    const bearer = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : '';
+    const studioToken = (typeof req.headers['x-studio-token'] === 'string' ? req.headers['x-studio-token'].trim() : '')
+      || bearer
+      || (url.searchParams.get('token')?.trim() ?? '');
+    const isAdmin = checkAdminAuth(req);
+    const tokenMatch = studioToken && studioToken === session.studioToken;
+    if (!isAdmin && !tokenMatch) {
+      sendJson(res, 401, { error: 'Unauthorized studio session token' });
+      return true;
+    }
+
+    if (method === 'GET' && sub === '') {
+      sendJson(res, 200, {
+        sessionId: session.sessionId,
+        rev: session.rev,
+        doc: session.doc,
+        selection: session.selection,
+        tasks: mapManager.getTaskSummaries(session.sessionId),
+        presence: mapManager.getMcpPresence(session.sessionId),
+        summary: validateMapPlayability(session.doc),
+      });
+      return true;
+    }
+
+    if (method === 'PUT' && sub === '') {
+      const body = await readJson<{ doc?: unknown; patchRect?: { x: number; y: number; w: number; h: number }; note?: string }>(req, 8 * 1024 * 1024);
+      const resUpdate = mapManager.updateSessionDraft(sid, body.doc ?? body, {
+        patchRect: body.patchRect,
+        note: body.note,
+      });
+      sendJson(res, resUpdate.ok ? 200 : 400, resUpdate);
+      return true;
+    }
+
+    if (method === 'POST' && sub === 'selection') {
+      const body = await readJson<{ x?: number; y?: number; w?: number; h?: number; note?: string; clear?: boolean } | null>(req, 256 * 1024);
+      const sel = !body || body.clear || body.x === undefined || body.y === undefined || body.w === undefined || body.h === undefined
+        ? null
+        : { x: Number(body.x), y: Number(body.y), w: Number(body.w), h: Number(body.h), ...(body.note ? { note: String(body.note) } : {}), updatedAt: Date.now() };
+      const resSel = mapManager.setSessionSelection(sid, sel);
+      sendJson(res, resSel.ok ? 200 : 400, resSel);
+      return true;
+    }
+
+    if (method === 'POST' && sub === 'rotate-token') {
+      const rotated = mapManager.rotateSessionToken(sid);
+      sendJson(res, rotated.ok ? 200 : 400, rotated);
+      return true;
+    }
+
+    if (method === 'POST' && sub === 'tasks') {
+      const body = await readJson<{
+        boxes?: Array<{ id?: string; label?: string; x: number; y: number; w: number; h: number; note?: string }>;
+        instruction?: string;
+      }>(req, 512 * 1024);
+      const enq = mapManager.enqueueTask(sid, body);
+      sendJson(res, enq.ok ? 201 : 400, enq);
+      return true;
+    }
+
+    const taskActionMatch = /^tasks\/([^/]+)\/(accept|revert|cancel)$/.exec(sub);
+    if (method === 'POST' && taskActionMatch) {
+      const taskId = decodeURIComponent(taskActionMatch[1]);
+      const action = taskActionMatch[2];
+      const out = action === 'accept'
+        ? mapManager.acceptTask(sid, taskId)
+        : action === 'revert'
+          ? mapManager.revertTask(sid, taskId)
+          : mapManager.cancelTask(sid, taskId);
+      sendJson(res, out.ok ? 200 : 400, out);
+      return true;
+    }
+
+    if (method === 'POST' && sub === 'undo') {
+      const resUndo = mapManager.undoSession(sid);
+      sendJson(res, resUndo.ok ? 200 : 400, resUndo);
+      return true;
+    }
+
+    if (method === 'POST' && sub === 'redo') {
+      const resRedo = mapManager.redoSession(sid);
+      sendJson(res, resRedo.ok ? 200 : 400, resRedo);
+      return true;
+    }
+
+    if (method === 'GET' && sub === 'events') {
+      res.writeHead(200, corsHeaders({
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      }));
+      res.flushHeaders?.();
+      writeSse(res, 'state', {
+        type: 'init',
+        sessionId: session.sessionId,
+        rev: session.rev,
+        doc: session.doc,
+        selection: session.selection,
+        tasks: mapManager.getTaskSummaries(session.sessionId),
+        presence: mapManager.getMcpPresence(session.sessionId),
+        summary: validateMapPlayability(session.doc),
+      });
+      const unsub = mapManager.subscribeSession(sid, (ev) => {
+        writeSse(res, ev.type, ev);
+      });
+      req.on('close', unsub);
+      return true;
+    }
+
+    sendJson(res, 404, { error: 'Unknown studio endpoint' });
+    return true;
+  }
+
+  if (p === '/api/mcp' || p.startsWith('/api/mcp/')) {
+    if (method === 'GET') {
+      sendJson(res, 200, { name: 'agent-party-map-mcp', ok: true, transport: 'streamable-http' });
+      return true;
+    }
+    if (method === 'POST') {
+      const auth = resolveMcpAuth(req, url, adminKey, mapManager);
+      if (!auth) {
+        sendJson(res, 401, { jsonrpc: '2.0', id: null, error: { code: -32001, message: 'Unauthorized MCP token (provide ws_ studio token or admin key).' } });
+        return true;
+      }
+      const rpc = await readJson(req, 8 * 1024 * 1024);
+      const ac = new AbortController();
+      res.on('close', () => ac.abort());
+      const transport = req.headers['x-mcp-transport'] === 'stdio' ? 'stdio' : 'http';
+      const reply = await handleMcpRpc(rpc, auth, mapManager, { signal: ac.signal, transport });
+      if (reply.status === 204) {
+        res.writeHead(204, corsHeaders());
+        res.end();
+        return true;
+      }
+      sendJson(res, reply.status, reply.body);
+      return true;
+    }
+  }
 
   // ---- Admin Panel & Protected Admin APIs
   if (method === 'GET' && p === '/admin') {
@@ -743,6 +953,57 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       const r = worldSync.triggerArenaDuel();
       sendJson(res, r.ok ? 200 : 400, r);
       return true;
+    }
+
+    if (method === 'GET' && p === '/api/admin/maps') {
+      sendJson(res, 200, mapManager.getPublicState());
+      return true;
+    }
+
+    if (method === 'POST' && p === '/api/admin/maps') {
+      const body = await readJson<{ doc?: unknown; id?: string; name?: string; activate?: boolean }>(req, 8 * 1024 * 1024);
+      const saved = mapManager.savePreset(body?.doc ?? body, { id: body?.id, name: body?.name });
+      if (!saved.ok) {
+        sendJson(res, 400, saved);
+        return true;
+      }
+      let active = null;
+      if (body?.activate) {
+        active = mapManager.activate({ mode: 'custom', mapId: saved.summary.id });
+      }
+      sendJson(res, 200, {
+        ok: true,
+        preset: saved.summary,
+        doc: saved.doc,
+        ...(active && active.ok ? { mode: active.mode, activeMapId: active.activeMapId, rev: active.rev } : {}),
+        maps: mapManager.getPublicState(),
+      });
+      return true;
+    }
+
+    if (method === 'POST' && p === '/api/admin/maps/activate') {
+      const body = await readJson<{ mode?: string; mapId?: string | null }>(req);
+      const act = mapManager.activate({
+        mode: body.mode === 'custom' ? 'custom' : 'auto',
+        mapId: body.mapId ?? null,
+      });
+      sendJson(res, act.ok ? 200 : 400, act.ok ? { ...act, maps: mapManager.getPublicState() } : act);
+      return true;
+    }
+
+    const adminMapMatch = /^\/api\/admin\/maps\/([^/]+)$/.exec(p);
+    if (adminMapMatch) {
+      const mapId = decodeURIComponent(adminMapMatch[1]);
+      if (method === 'GET') {
+        const doc = mapManager.getPreset(mapId);
+        sendJson(res, doc ? 200 : 404, doc ? { ok: true, doc } : { error: 'Map preset not found' });
+        return true;
+      }
+      if (method === 'DELETE') {
+        const del = mapManager.deletePreset(mapId);
+        sendJson(res, del.ok ? 200 : 400, del.ok ? { ok: true, maps: mapManager.getPublicState() } : del);
+        return true;
+      }
     }
 
     sendJson(res, 404, { error: 'Unknown admin endpoint' });

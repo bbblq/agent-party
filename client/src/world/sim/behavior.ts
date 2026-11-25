@@ -138,9 +138,13 @@ export function chooseSeat(
   spots: readonly SpotDef[],
   isFree: (id: string) => boolean,
   _kind: AgentKind,
-  opts?: { noBackView?: boolean },
+  opts?: { noBackView?: boolean; preferredSpotId?: string },
 ): SpotDef | null {
   const noBack = !!opts?.noBackView;
+  if (opts?.preferredSpotId) {
+    const pref = spots.find((s) => s.id === opts.preferredSpotId && isFree(s.id) && (!noBack || !s.seated || s.dir !== 'up'));
+    if (pref) return pref;
+  }
   const desks = spots
     .filter((s) => s.kind === 'desk' && isFree(s.id) && (!noBack || s.dir !== 'up'))
     .sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));

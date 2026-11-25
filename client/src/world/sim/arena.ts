@@ -520,7 +520,8 @@ export class ArenaController {
       for (const id of this.remoteParticipants) {
         const c = this.sim.chars.get(id);
         if (!c || c.gone) continue;
-        if (c.atSpot && c.atSpot.startsWith(ARENA_ID)) {
+        const sp = c.atSpot ? this.sim.spots.get(c.atSpot) : undefined;
+        if (sp && (sp.kind === 'arena_fight' || sp.kind === 'arena_watch')) {
           this.sim.spots.release(c.atSpot, c.id);
           c.atSpot = null;
           c.seated = false;
@@ -581,9 +582,11 @@ export class ArenaController {
   }
 
   private ringSpots(): { left: SpotDef; right: SpotDef } | null {
+    const arenaId = this.arenaAreaId();
+    if (!arenaId) return null;
     const spots = this.sim.spots
       .ofKind('arena_fight')
-      .filter((s) => s.areaId === ARENA_ID)
+      .filter((s) => s.areaId === arenaId)
       .sort((a, b) => a.tx - b.tx);
     if (spots.length < 2) return null;
     return { left: spots[0], right: spots[1] };
@@ -682,14 +685,20 @@ export class ArenaController {
     return true;
   }
 
+  private arenaAreaId(): string | null {
+    return this.sim.building.arena?.id ?? null;
+  }
+
   private nowTime(): number {
     return this.sim.now || Date.now();
   }
 
   private inviteWatchers(now: number, limit: number): void {
+    const arenaId = this.arenaAreaId();
+    if (!arenaId) return;
     const watchSpots = this.sim.spots
       .ofKind('arena_watch')
-      .filter((s) => s.areaId === ARENA_ID && this.sim.spots.isFree(s.id));
+      .filter((s) => s.areaId === arenaId && this.sim.spots.isFree(s.id));
     if (!watchSpots.length) return;
 
     const cands: Character[] = [];
@@ -757,15 +766,18 @@ export class ArenaController {
       if (left) left.dir = 'right';
       if (right) right.dir = 'left';
     }
-    const freeWatch = this.sim.spots
-      .ofKind('arena_watch')
-      .filter((s) => s.areaId === ARENA_ID && this.sim.spots.isFree(s.id));
+    const arenaId = this.arenaAreaId();
+    const freeWatch = arenaId
+      ? this.sim.spots
+          .ofKind('arena_watch')
+          .filter((s) => s.areaId === arenaId && this.sim.spots.isFree(s.id))
+      : [];
     let wIdx = 0;
     for (const id of this.state.watchers) {
       const w = this.sim.chars.get(id);
       if (!this.isParticipantValid(w)) continue;
       const cur = w!.atSpot ? this.sim.spots.get(w!.atSpot) : undefined;
-      if (cur && cur.areaId === ARENA_ID) continue;
+      if (cur && arenaId && cur.areaId === arenaId) continue;
       while (wIdx < freeWatch.length && !this.sim.canUseSeat(w!, freeWatch[wIdx])) wIdx++;
       if (wIdx < freeWatch.length) {
         this.snapToSpot(w!, freeWatch[wIdx++]);
@@ -941,7 +953,8 @@ export class ArenaController {
       for (const id of participants) {
         const c = this.sim.chars.get(id);
         if (!c || c.gone) continue;
-        if (c.atSpot && c.atSpot.startsWith(ARENA_ID)) {
+        const sp = c.atSpot ? this.sim.spots.get(c.atSpot) : undefined;
+        if (sp && (sp.kind === 'arena_fight' || sp.kind === 'arena_watch')) {
           this.sim.spots.release(c.atSpot, c.id);
           c.atSpot = null;
           c.seated = false;

@@ -9,6 +9,7 @@
 !assets/
 !scripts/build-server.mjs
 !scripts/build-info.mjs
+!scripts/map-mcp.mjs
 
 # Exclude local junk inside included folders.
 **/node_modules

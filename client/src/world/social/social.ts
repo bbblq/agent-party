@@ -458,6 +458,13 @@ export class Social {
 
   // =================================================================== lugares de cada roda
 
+  private matchesAreaKind(s: SpotDef, kind: 'lounge' | 'restroom' | 'cafe', fallbackId: string): boolean {
+    const areas = this.sim.building.core.filter((a) => a.kind === kind);
+    if (areas.length) return areas.some((a) => a.id === s.areaId);
+    if (this.sim.customMap) return true;
+    return s.areaId === fallbackId;
+  }
+
   /** Lugares para `n` participantes da roda (null = não há lugar livre agora). */
   plan(kind: GatherKind, n: number, ch: Character): SeatPlan | null {
     const spots = this.sim.spots;
@@ -466,7 +473,7 @@ export class Social {
       case 'tv':
       case 'videogame': {
         if (this.tvBusy()) return null;
-        const seats = [...spots.ofKind('sofa'), ...spots.ofKind('armchair')].filter((s) => s.areaId === LOUNGE_ID && free(s));
+        const seats = [...spots.ofKind('sofa'), ...spots.ofKind('armchair')].filter((s) => this.matchesAreaKind(s, 'lounge', LOUNGE_ID) && free(s));
         const noBack = lacksBackView(ch.info.pet);
         if (noBack) {
           const frontSeats = seats.filter((s) => s.dir !== 'up');
@@ -510,7 +517,7 @@ export class Social {
       case 'kitchen':
         return this.kitchenSeats(n, free, ch.rng, lacksBackView(ch.info.pet));
       case 'mirror': {
-        const sinks = spots.ofKind('sink').filter((s) => s.areaId === RESTROOM_ID && free(s)).sort((a, b) => a.tx - b.tx);
+        const sinks = spots.ofKind('sink').filter((s) => this.matchesAreaKind(s, 'restroom', RESTROOM_ID) && free(s)).sort((a, b) => a.tx - b.tx);
         if (n === 1) return sinks.length ? { seats: [sinks[Math.floor(ch.rng() * sinks.length)]], pool: [] } : null;
         for (let i = 0; i + 1 < sinks.length; i++) if (sinks[i + 1].tx === sinks[i].tx + 1) return { seats: [sinks[i], sinks[i + 1]], pool: [] };
         return null;
@@ -523,7 +530,7 @@ export class Social {
    * Para 3–4, dois pares vizinhos da mesa comprida.
    */
   private kitchenSeats(n: number, free: (s: SpotDef) => boolean, rng: () => number, noBackView = false): SeatPlan | null {
-    const seats = this.sim.spots.ofKind('cafe_seat').filter((s) => s.areaId === CAFE_ID);
+    const seats = this.sim.spots.ofKind('cafe_seat').filter((s) => this.matchesAreaKind(s, 'cafe', CAFE_ID));
     const at = (x: number, y: number, dir: Dir) => seats.find((s) => s.tx === x && s.ty === y && s.dir === dir);
     const pairs: SpotDef[][] = [];
     for (const s of seats) {
@@ -866,7 +873,7 @@ export class Social {
     this.lastLeisureEventAt = now;
     this.lastSoloEventAt.set(ch.id, now);
     if (this.events.length >= MAX_EVENTS) this.events.shift();
-    const place = PLACES[areaId] ?? this.sim.rooms.get(areaId)?.info.name ?? tr('Escritório');
+    const place = PLACES[areaId] ?? this.sim.zoneName(areaId);
     this.events.push({ id: `social:leisure:${++this.eventSeq}`, at: now, icon, agentId: ch.id, text, place });
   }
 
@@ -1374,7 +1381,7 @@ export class Social {
     if (this.events.length >= MAX_EVENTS) this.events.shift();
     const first = g.members.find((m) => m.spot);
     const area = first?.spot ? this.sim.spots.get(first.spot)?.areaId : undefined;
-    const place = (area && (PLACES[area] ?? this.sim.rooms.get(area)?.info.name)) || tr('Escritório');
+    const place = (area && (PLACES[area] ?? this.sim.zoneName(area))) || tr('Escritório');
     this.events.push({ id: `social:${g.id}:${++this.eventSeq}`, at: now, icon, agentId, text, place });
   }
 

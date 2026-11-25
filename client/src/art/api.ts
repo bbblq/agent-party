@@ -141,8 +141,13 @@ export type FurnitureKind =
   // --- escritório (salas de projeto)
   | 'desk' // 2x1. Mesa com monitor virado para o SUL (tela visível para a câmera), teclado e caneca. rects.screen = área da tela.
   | 'desk_back' // 2x1. Mesa vista pelo outro lado: vemos a TRASEIRA do monitor; a pessoa senta ao NORTE dela, virada para baixo (rosto visível). Para ilhas de mesas face a face. Mesmas variants de desk.
+  | 'desk_east' // 1x2. Mesa lateral com monitor virado para LESTE (pessoa senta ao LESTE, virada para a esquerda). rects.screen = área da tela.
+  | 'desk_west' // 1x2. Mesa lateral com monitor virado para OESTE (pessoa senta ao OESTE, virada para a direita). rects.screen = área da tela.
   | 'office_chair_front' // 1x1 assento virado para BAIXO (encosto ao norte, desenhado ANTES do personagem; sem front). Par da desk_back.
   | 'office_chair' // 1x1 assento. Encosto ao sul (personagem senta virado para cima, de costas). front = encosto.
+  | 'office_chair_left' // 1x1 assento virado para a ESQUERDA (encosto ao leste). Par da desk_east.
+  | 'office_chair_right' // 1x1 assento virado para a DIREITA (encosto ao oeste). Par da desk_west.
+  | 'entrance_mat' // 2x1 capacho/entrada para mapas customizados sem elevador.
   | 'bookshelf' // 2x1 encostada na parede norte. Livros coloridos.
   | 'filing_cabinet' // 1x1 arquivo de gavetas.
   | 'printer' // 1x1 impressora sobre móvel baixo.
@@ -219,8 +224,13 @@ export interface FurnitureDef {
 export const FURNITURE: Readonly<Record<FurnitureKind, FurnitureDef>> = {
   desk: { mount: 'floor', footprint: { w: 2, h: 1 }, blocks: true, variants: ['wood', 'white', 'dark'] },
   desk_back: { mount: 'floor', footprint: { w: 2, h: 1 }, blocks: true, variants: ['wood', 'white', 'dark'] },
+  desk_east: { mount: 'floor', footprint: { w: 1, h: 2 }, blocks: true, variants: ['wood', 'white', 'dark'] },
+  desk_west: { mount: 'floor', footprint: { w: 1, h: 2 }, blocks: true, variants: ['wood', 'white', 'dark'] },
   office_chair_front: { mount: 'floor', footprint: { w: 1, h: 1 }, blocks: false, seat: true, variants: ['black', 'blue', 'red', 'green', 'gray'] },
   office_chair: { mount: 'floor', footprint: { w: 1, h: 1 }, blocks: false, seat: true, variants: ['black', 'blue', 'red', 'green', 'gray'] },
+  office_chair_left: { mount: 'floor', footprint: { w: 1, h: 1 }, blocks: false, seat: true, variants: ['black', 'blue', 'red', 'green', 'gray'] },
+  office_chair_right: { mount: 'floor', footprint: { w: 1, h: 1 }, blocks: false, seat: true, variants: ['black', 'blue', 'red', 'green', 'gray'] },
+  entrance_mat: { mount: 'floor', footprint: { w: 2, h: 1 }, blocks: false, variants: ['dark', 'warm', 'blue'] },
   bookshelf: { mount: 'floor', footprint: { w: 2, h: 1 }, blocks: true },
   filing_cabinet: { mount: 'floor', footprint: { w: 1, h: 1 }, blocks: true },
   printer: { mount: 'floor', footprint: { w: 1, h: 1 }, blocks: true },

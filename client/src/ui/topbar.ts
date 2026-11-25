@@ -47,6 +47,7 @@ export class TopBar implements UiComponent {
   private feedBtn: HTMLButtonElement;
   private timelapseBtn: HTMLButtonElement;
   readonly settingsBtn: HTMLButtonElement;
+  readonly mapStudioBtn: HTMLButtonElement;
   /** Abre a janela do Habblaud World (ao lado de Configurações); a janela decide quando ele aparece. */
   readonly worldBtn: HTMLButtonElement;
   private readonly spawnBtn: HTMLButtonElement;
@@ -132,8 +133,14 @@ export class TopBar implements UiComponent {
     const adminTopBtn = h('a', {
       class: 'ui-btn ui-btn--sm',
       text: '管理',
-      attrs: { href: '/admin', target: '_blank', rel: 'noopener noreferrer', title: '管理员控制台（移除恶意成员 / 创建 NPC）' },
+      attrs: { href: '/admin', target: '_blank', rel: 'noopener noreferrer', title: '管理员控制台（切换地图 / 管理成员与 NPC）' },
     });
+    this.mapStudioBtn = h('button', {
+      class: 'ui-btn ui-btn--sm',
+      type: 'button',
+      text: '🗺️ 地图工坊',
+      attrs: { title: '打开自定义大地图编辑器与 AI 框选 MCP 工坊（支持导出发给管理员）' },
+    }) as HTMLButtonElement;
     const viewGroup = h(
       'div',
       { class: 'ui-btn-group', role: 'group', attrs: { 'aria-label': tr('Câmera') } },
@@ -144,6 +151,7 @@ export class TopBar implements UiComponent {
     const panelGroup = h(
       'div',
       { class: 'ui-btn-group', role: 'group', attrs: { 'aria-label': tr('Painéis') } },
+      this.mapStudioBtn,
       setupTopBtn,
       adminTopBtn,
       this.settingsBtn,

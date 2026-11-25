@@ -754,7 +754,8 @@ describe('Pokémon Duel Arena layout, lifecycle & leaderboard persistence', () =
       }
       const sim = new Sim(stubArt, () => DEFAULT_WORLD_OPTIONS, null);
       sim.applySnapshot(store.toSnapshot(1_700_000_000_000), 1_700_000_000_000);
-      const arena = sim.building.arena;
+      const arena = sim.building.arena!;
+      expect(arena).not.toBeNull();
       expect(arena.id).toBe('core:arena');
       expect(arena.spots.filter((s) => s.kind === 'arena_fight')).toHaveLength(2);
       expect(arena.spots.filter((s) => s.kind === 'arena_watch')).toHaveLength(6);

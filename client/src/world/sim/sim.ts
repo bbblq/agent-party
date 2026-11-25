@@ -5,6 +5,8 @@ import type { AgentInfo, OfficeSnapshot, Provider, RoomInfo, WorldSyncFrame } fr
 import type { ArtModule, Dir, HeldItem, IconName, Pose, RoomTheme } from '../../art/api';
 import type { WorldOptions } from '../api';
 import { COL_W, COMPACT_DELAY_MS, DISMANTLE_DELAY_MS, FOOT_DX, FOOT_DY, MISSING_DEBOUNCE_MS, RUN_SPEED, TILE, WALK_SPEED } from '../constants';
+import { compileCustomMap } from '../../../../shared/map/compiler';
+import type { CustomMapDocument } from '../../../../shared/map/types';
 import { assembleBuilding, type BuildingLayout } from '../layout/building';
 import { CAFE_ID, LOUNGE_ID, RECEPTION_ID } from '../layout/core';
 import { columnsFor, inRect, slotAt } from '../layout/geometry';
@@ -153,6 +155,9 @@ export class Sim {
   visitLight: VisitLight = 'live';
   /** Texto dinâmico exibido na placa da recepção (configurável via /admin). */
   receptionSign = 'Agent Party';
+  /** Custom map mode document when active (null = default auto-expanding building). */
+  customMap: CustomMapDocument | null = null;
+  private customZoneNames = new Map<string, string>();
 
   /** `storage` das carteiras: null = só em memória (o timelapse não mexe nas moedinhas de verdade). */
   constructor(
@@ -189,38 +194,42 @@ export class Sim {
     this.accounts = new Map(snap.accounts.map((a) => [a.id, { short: a.short, color: a.color, name: a.name, ...(a.provider === 'codex' ? { provider: a.provider } : {}) }]));
 
     // ---- salas
-    let layoutDirty = false;
-    const listed = new Set<string>();
-    // na ordem de chegada (slot do servidor): na carga inicial as salas ocupam as vagas 0, 1, 2... nessa ordem
-    for (const r of [...snap.rooms].sort((a, b) => a.slot - b.slot)) {
-      if (this.hiddenRooms.has(r.id)) continue;
-      listed.add(r.id);
-      const rs = this.rooms.get(r.id);
-      if (!rs) {
-        this.createRoom(r, immediateRooms, now);
-        layoutDirty = true;
-        continue;
-      }
-      if (rs.info.name !== r.name || rs.info.seed !== r.seed) rs.version++;
-      rs.info = r;
-      if (!rs.listed) {
-        rs.listed = true;
-        rs.readyToDismantleAt = 0;
-        if (rs.phase === 'dismantling') rs.rebuild(now);
-      }
-    }
-    for (const rs of this.rooms.values()) {
-      if (!listed.has(rs.id) && rs.listed) {
-        if (this.synced) {
-          this.rooms.delete(rs.id);
+    if (this.customMap) {
+      this.syncCustomRooms(now);
+    } else {
+      let layoutDirty = false;
+      const listed = new Set<string>();
+      // na ordem de chegada (slot do servidor): na carga inicial as salas ocupam as vagas 0, 1, 2... nessa ordem
+      for (const r of [...snap.rooms].sort((a, b) => a.slot - b.slot)) {
+        if (this.hiddenRooms.has(r.id)) continue;
+        listed.add(r.id);
+        const rs = this.rooms.get(r.id);
+        if (!rs) {
+          this.createRoom(r, immediateRooms, now);
           layoutDirty = true;
-        } else {
-          rs.listed = false;
-          rs.unlistedAt = now;
+          continue;
+        }
+        if (rs.info.name !== r.name || rs.info.seed !== r.seed) rs.version++;
+        rs.info = r;
+        if (!rs.listed) {
+          rs.listed = true;
+          rs.readyToDismantleAt = 0;
+          if (rs.phase === 'dismantling') rs.rebuild(now);
         }
       }
+      for (const rs of this.rooms.values()) {
+        if (!listed.has(rs.id) && rs.listed) {
+          if (this.synced) {
+            this.rooms.delete(rs.id);
+            layoutDirty = true;
+          } else {
+            rs.listed = false;
+            rs.unlistedAt = now;
+          }
+        }
+      }
+      if (layoutDirty) this.relayout();
     }
-    if (layoutDirty) this.relayout();
     this.roomFx.sync(snap.rooms, input.serverTime, now);
 
     // ---- agentes
@@ -383,6 +392,83 @@ export class Sim {
   /** Reaplica o último snapshot (depuração). */
   reapply(now: number): void {
     if (this.lastSnapshot) this.applySnapshot(this.lastSnapshot, now);
+  }
+
+  /** Switches between auto-expanding building mode and a compiled custom map document. */
+  setCustomMap(doc: CustomMapDocument | null, now = this.now || Date.now()): void {
+    this.customMap = doc;
+    this.customZoneNames.clear();
+    if (doc) {
+      for (const z of doc.zones) this.customZoneNames.set(z.id, z.name);
+      this.relayout(true);
+      this.syncCustomRooms(now);
+    } else {
+      this.rooms.clear();
+      if (this.lastSnapshot) {
+        for (const r of [...this.lastSnapshot.rooms].sort((a, b) => a.slot - b.slot)) {
+          if (!this.hiddenRooms.has(r.id)) this.createRoom(r, true, now);
+        }
+      }
+      this.relayout(true);
+    }
+    for (const ch of this.chars.values()) {
+      if (ch.leaving || ch.gone) continue;
+      if (ch.homeSpot && !this.spots.get(ch.homeSpot)) ch.homeSpot = null;
+      this.assignHome(ch);
+      this.interrupt(ch);
+      const home = this.spots.get(ch.homeSpot);
+      if (home) {
+        this.snapTo(ch, home);
+      } else {
+        const entry = this.entryTile(ch);
+        ch.placeAtTile(entry.tx, entry.ty);
+      }
+    }
+    this.refreshRoomInfo();
+  }
+
+  zoneName(id: string): string | undefined {
+    return this.customZoneNames.get(id);
+  }
+
+  private syncCustomRooms(now: number): void {
+    if (!this.customMap) return;
+    const prevLights = new Map<string, { lightOn: boolean; lightAt: number }>();
+    for (const [id, r] of this.rooms) {
+      prevLights.set(id, { lightOn: r.lightOn, lightAt: r.lightAt });
+    }
+    this.rooms.clear();
+    let theme = FALLBACK_THEME;
+    try {
+      theme = this.art.roomTheme(42) ?? FALLBACK_THEME;
+    } catch {
+      theme = FALLBACK_THEME;
+    }
+    this.building.rooms.forEach((layout, i) => {
+      const z = this.customMap?.zones.find((item) => item.id === layout.id);
+      const info: RoomInfo = {
+        id: layout.id,
+        name: z?.name ?? layout.id,
+        path: `/zone/${layout.id}`,
+        slot: i,
+        seed: 42 + i * 17,
+        createdAt: now,
+      };
+      const prev = prevLights.get(layout.id);
+      const rs = new RoomState(info, theme, layout, 'ready', now, prev?.lightOn ?? true, i);
+      if (prev) rs.lightAt = prev.lightAt;
+      this.rooms.set(layout.id, rs);
+    });
+  }
+
+  private entryTile(ch: Character): { tx: number; ty: number; dir: Dir } {
+    const spawns = this.spots.ofKind('spawn');
+    if (spawns.length) {
+      const s = spawns[Math.floor(ch.rng() * spawns.length)];
+      return { tx: s.tx, ty: s.ty, dir: s.dir };
+    }
+    const t = this.lobbyTile(ch);
+    return { tx: t.x, ty: t.y, dir: 'down' };
   }
 
   private createRoom(r: RoomInfo, first: boolean, now: number): RoomState {
@@ -579,7 +665,16 @@ export class Sim {
     ch.shellDoneAt = latestShellDone(a)?.at ?? 0;
     this.chars.set(a.id, ch);
     if (first) return ch;
-    // chegada pelo elevador
+    // chegada pelo elevador (ou ponto de entrada em mapas sem elevador)
+    if (!this.elevators.length) {
+      const entry = this.entryTile(ch);
+      ch.placeAtTile(entry.tx, entry.ty);
+      ch.dir = entry.dir;
+      ch.alpha = 1;
+      ch.inside = false;
+      ch.arriving = false;
+      return ch;
+    }
     const el = this.pickElevator(ch);
     const spot = this.spots.get(el.spotId)!;
     ch.placeAtTile(spot.tx, spot.ty);
@@ -659,12 +754,24 @@ export class Sim {
     if (ch.homeSpot && existing && this.spots.ownerOf(ch.homeSpot) === ch.id && this.canUseSeat(ch, existing)) return;
     if (ch.homeSpot) this.spots.release(ch.homeSpot, ch.id);
     ch.homeSpot = null;
-    const room = this.rooms.get(ch.roomId);
-    if (!room || !room.present) return;
-    const seat = chooseSeat(room.layout.spots, (id) => this.spots.isFree(id, ch.id), ch.info.kind, {
-      noBackView: lacksBackView(ch.info.pet),
-    });
-    if (seat && this.spots.reserve(seat.id, ch.id)) ch.homeSpot = seat.id;
+    const opts = { noBackView: lacksBackView(ch.info.pet), preferredSpotId: ch.info.preferredSpotId };
+    const prefZoneId = ch.info.preferredZoneId ?? ch.roomId;
+    const room = this.rooms.get(prefZoneId);
+    if (room && room.present) {
+      const seat = chooseSeat(room.layout.spots, (id) => this.spots.isFree(id, ch.id), ch.info.kind, opts);
+      if (seat && this.spots.reserve(seat.id, ch.id)) {
+        ch.homeSpot = seat.id;
+        ch.roomId = room.id;
+        return;
+      }
+    }
+    if (this.customMap) {
+      const seat = chooseSeat(this.building.spots, (id) => this.spots.isFree(id, ch.id), ch.info.kind, opts);
+      if (seat && this.spots.reserve(seat.id, ch.id)) {
+        ch.homeSpot = seat.id;
+        if (this.rooms.has(seat.areaId)) ch.roomId = seat.areaId;
+      }
+    }
   }
 
   private pickElevator(ch: Character): Elevator {
@@ -677,27 +784,35 @@ export class Sim {
 
   /** Recalcula o prédio (largura, grade, spots) a partir das salas presentes. */
   relayout(force = false): void {
-    const present = [...this.rooms.values()].filter((r) => r.present);
-    let cols = columnsFor(present.map((r) => r.slot));
-    if (present.some((r) => r.slot === slotAt(cols - 1, 'south'))) cols++;
-    const cur = this.building.cols;
-    if (cols < cur && !force) {
-      // só encolhe quando ninguém está na faixa que vai sumir
-      const limit = cols * COL_W * TILE;
-      if ([...this.chars.values()].some((c) => !c.gone && c.x >= limit - TILE)) {
-        cols = cur;
-        this.shrinkPending = true;
+    let building: BuildingLayout;
+    if (this.customMap) {
+      building = compileCustomMap(this.customMap, this.layoutVersion + 1);
+      this.shrinkPending = false;
+    } else {
+      const present = [...this.rooms.values()].filter((r) => r.present);
+      let cols = columnsFor(present.map((r) => r.slot));
+      if (present.some((r) => r.slot === slotAt(cols - 1, 'south'))) cols++;
+      const cur = this.building.cols;
+      if (cols < cur && !force) {
+        // só encolhe quando ninguém está na faixa que vai sumir
+        const limit = cols * COL_W * TILE;
+        if ([...this.chars.values()].some((c) => !c.gone && c.x >= limit - TILE)) {
+          cols = cur;
+          this.shrinkPending = true;
+        } else this.shrinkPending = false;
       } else this.shrinkPending = false;
-    } else this.shrinkPending = false;
-    const building = assembleBuilding(
-      cols,
-      present.map((r) => r.layout),
-      this.layoutVersion + 1,
-    );
+      building = assembleBuilding(
+        cols,
+        present.map((r) => r.layout),
+        this.layoutVersion + 1,
+      );
+    }
     this.building = building;
     this.layoutVersion++;
     this.finder.setGrid(building.grid);
     const lost = this.spots.setSpots(building.spots);
+    this.elevators.length = 0;
+    for (const s of this.spots.ofKind('elevator')) this.elevators.push(new Elevator(this.elevators.length, s.id));
     for (const { owner } of lost) {
       const ch = this.chars.get(owner);
       if (!ch) continue;
@@ -789,6 +904,7 @@ export class Sim {
   }
 
   private updateRooms(now: number): void {
+    if (this.customMap) return;
     let dirty = false;
     for (const room of this.rooms.values()) {
       if (room.phase === 'building' && room.progress(now) >= 1) room.setPhase('ready', now);
@@ -1484,10 +1600,16 @@ export class Sim {
     const r = room.layout.rect;
     const door = room.layout.door;
     const busy = this.busyTiles(ch.id);
+    const cx = door ? door.x + door.w / 2 : r.x + r.w / 2;
+    const cy = door ? door.y + door.h / 2 : r.y + r.h / 2;
+    const minX = Math.max(r.x + 1, Math.floor(cx - 14));
+    const maxX = Math.min(r.x + r.w - 2, Math.ceil(cx + 14));
+    const minY = Math.max(r.y + (this.customMap ? 1 : 2), Math.floor(cy - 12));
+    const maxY = Math.min(r.y + r.h - 2, Math.ceil(cy + 12));
     let best: { x: number; y: number } | null = null;
     let bestScore = -Infinity;
-    for (let y = r.y + 2; y <= r.y + 10; y++) {
-      for (let x = r.x + 1; x <= r.x + 14; x++) {
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = minX; x <= maxX; x++) {
         if (!this.overflowFree(x, y, ch, busy)) continue;
         if (door && Math.abs(x - (door.x + door.w / 2 - 0.5)) <= 1.5 && Math.abs(y - (door.y + door.h / 2 - 0.5)) <= 2) continue;
         // de costas para uma parede/móvel parece natural; espremido entre dois móveis ou colado em
@@ -1513,14 +1635,30 @@ export class Sim {
   }
 
   private lobbyTile(ch: Character): { x: number; y: number } {
-    const reception = this.building.core.find((a) => a.id === RECEPTION_ID)!;
-    const r = reception.rect;
-    for (let k = 0; k < 20; k++) {
-      const x = r.x + 2 + Math.floor(ch.rng() * 12);
-      const y = r.y + 3 + Math.floor(ch.rng() * 7);
-      if (this.building.grid.get(x, y) === 1) return { x, y };
+    const reception = this.building.core.find((a) => a.id === RECEPTION_ID || a.kind === 'reception');
+    if (reception) {
+      const r = reception.rect;
+      const w = Math.max(1, r.w - 4);
+      const h = Math.max(1, r.h - 5);
+      for (let k = 0; k < 20; k++) {
+        const x = r.x + 2 + Math.floor(ch.rng() * w);
+        const y = r.y + 3 + Math.floor(ch.rng() * h);
+        if (this.building.grid.get(x, y) === 1) return { x, y };
+      }
+      const fallback = this.building.grid.nearestWalkable(r.x + Math.floor(r.w / 2), r.y + Math.floor(r.h / 2));
+      if (fallback) return fallback;
     }
-    return { x: r.x + 6, y: r.y + 9 };
+    const spawns = this.spots.ofKind('spawn');
+    if (spawns.length) {
+      const s = spawns[Math.floor(ch.rng() * spawns.length)];
+      return { x: s.tx, y: s.ty };
+    }
+    return (
+      this.building.grid.nearestWalkable(
+        Math.floor(this.building.grid.w / 2),
+        Math.floor(this.building.grid.h / 2),
+      ) ?? { x: 1, y: 1 }
+    );
   }
 
   private planDelegate(ch: Character, now: number): void {
@@ -1570,10 +1708,27 @@ export class Sim {
         );
       }
     }
-    const el = this.pickElevator(ch);
-    const es = this.spots.get(el.spotId)!;
-    steps.push({ t: 'go', tx: es.tx, ty: es.ty, fx: es.tx * TILE + FOOT_DX + (es.x - (es.tx * TILE + FOOT_DX)) * 0.5, fy: es.ty * TILE + FOOT_DY - 2, dir: 'up' });
-    steps.push({ t: 'elevIn', elev: el.index, phase: 0 }, { t: 'remove' });
+    if (this.elevators.length) {
+      const el = this.pickElevator(ch);
+      const es = this.spots.get(el.spotId)!;
+      steps.push({ t: 'go', tx: es.tx, ty: es.ty, fx: es.tx * TILE + FOOT_DX + (es.x - (es.tx * TILE + FOOT_DX)) * 0.5, fy: es.ty * TILE + FOOT_DY - 2, dir: 'up' });
+      steps.push({ t: 'elevIn', elev: el.index, phase: 0 }, { t: 'remove' });
+    } else {
+      const spawns = this.spots.ofKind('spawn');
+      if (spawns.length) {
+        let best = spawns[0];
+        let bestD = Infinity;
+        for (const s of spawns) {
+          const d = Math.abs(s.tx - ch.tx) + Math.abs(s.ty - ch.ty);
+          if (d < bestD) { bestD = d; best = s; }
+        }
+        steps.push({ t: 'go', tx: best.tx, ty: best.ty, dir: best.dir });
+      } else {
+        const tile = this.lobbyTile(ch);
+        steps.push({ t: 'go', tx: tile.x, ty: tile.y });
+      }
+      steps.push({ t: 'remove' });
+    }
     ch.queue.push(...steps);
     void now;
     return true;
@@ -1714,7 +1869,7 @@ export class Sim {
         steps.push({ t: 'act', pose: 'use', ms: 1900, machine: s.furnitureId, icon: 'coffee' }, { t: 'act', pose: 'drink', held: 'coffee', ms: 2600 });
         release(s);
         carry = 'coffee';
-        this.social.pushLeisureEvent(ch, '☕', '去茶水间冲了杯咖啡', CAFE_ID, now);
+        this.social.pushLeisureEvent(ch, '☕', '去茶水间冲了杯咖啡', s.areaId || CAFE_ID, now);
         if (rng() < 0.45) {
           const seat = this.spots.findFree('cafe_seat', {
             by: ch.id,
@@ -1742,7 +1897,7 @@ export class Sim {
         steps.push({ t: 'act', pose: 'use', ms: 1000 }, { t: 'act', pose: 'drink', held: 'water', ms: 2500 });
         release(s);
         carry = rng() < 0.4 ? 'water' : 'none';
-        this.social.pushLeisureEvent(ch, '💧', '去接了杯水歇口气', CAFE_ID, now);
+        this.social.pushLeisureEvent(ch, '💧', '去接了杯水歇口气', s.areaId || CAFE_ID, now);
         break;
       }
       case 'bathroom': {
@@ -1782,7 +1937,7 @@ export class Sim {
         this.pushLeave(ch, steps);
         steps.push({ t: 'go', tx: s.tx, ty: s.ty }, { t: 'enter', spot: s.id }, { t: 'act', pose: 'read', held: 'phone', ms: between(rng, 8000, 18000) }, { t: 'exit' });
         release(s);
-        this.social.pushLeisureEvent(ch, '📱', '窝在休息区刷起了手机', LOUNGE_ID, now);
+        this.social.pushLeisureEvent(ch, '📱', '窝在休息区刷起了手机', s.areaId || LOUNGE_ID, now);
         break;
       }
       case 'window': {
@@ -1812,7 +1967,7 @@ export class Sim {
         goUse(s);
         steps.push({ t: 'act', pose: 'use', ms: between(rng, 6000, 12000), icon: rng() < 0.4 ? 'star' : undefined });
         release(s);
-        this.social.pushLeisureEvent(ch, '🕹️', '去休息区玩起了街机', LOUNGE_ID, now);
+        this.social.pushLeisureEvent(ch, '🕹️', '去休息区玩起了街机', s.areaId || LOUNGE_ID, now);
         break;
       }
       case 'snack': {
@@ -1823,7 +1978,7 @@ export class Sim {
         goUse(s);
         steps.push({ t: 'act', pose: 'use', ms: 1600 }, { t: 'act', pose: 'stand', ms: 900 });
         release(s);
-        this.social.pushLeisureEvent(ch, '🍪', '去茶水间找零食吃', CAFE_ID, now);
+        this.social.pushLeisureEvent(ch, '🍪', '去茶水间找零食吃', s.areaId || CAFE_ID, now);
         break;
       }
       case 'stretch': {

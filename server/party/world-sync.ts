@@ -1,6 +1,7 @@
 import type { Appearance, ArtModule, RoomTheme } from '../../client/src/art/api';
 import { DEFAULT_WORLD_OPTIONS } from '../../client/src/world/api';
 import { Sim } from '../../client/src/world/sim/sim';
+import type { CustomMapDocument } from '../../shared/map';
 import type { ArenaChampionRecord, ArenaLeaderboardEntry, OfficeSnapshot, SyncedArenaEvent, SyncedArenaState, SyncedGathering, WorldSyncFrame } from '../../shared/types';
 
 const HEADLESS_THEME: RoomTheme = {
@@ -71,6 +72,7 @@ export class WorldSync {
     opts?: {
       initialLeaderboard?: ArenaLeaderboardEntry[];
       initialPrevChampion?: ArenaChampionRecord | null;
+      initialCustomMap?: CustomMapDocument | null;
       onArenaResult?: (winnerId: string, winnerName: string, loserId: string, loserName: string, now?: number) => void;
       onArenaLeaderboardReset?: (now: number) => void;
     },
@@ -82,6 +84,7 @@ export class WorldSync {
     if (opts?.onArenaLeaderboardReset) this.sim.arena.onLeaderboardReset = opts.onArenaLeaderboardReset;
     this.latestSnapRev = initialSnapshot.rev;
     const now = Date.now();
+    if (opts?.initialCustomMap) this.sim.setCustomMap(opts.initialCustomMap, now);
     this.sim.applySnapshot(initialSnapshot, now);
     this.sim.update(1 / 30, now);
     this.lastTickAt = now;
@@ -95,6 +98,15 @@ export class WorldSync {
     const res = this.sim.arena.triggerNow(now);
     if (res.ok) this.syncArenaChange(now);
     return res;
+  }
+
+  setCustomMap(doc: CustomMapDocument | null, now = Date.now()): void {
+    this.sim.setCustomMap(doc, now);
+    this.syncArenaChange(now);
+    if (this.listeners.size > 0) {
+      this.latestFrame = this.buildFrame(now);
+      for (const cb of this.listeners) cb(this.latestFrame);
+    }
   }
 
   onFrame(cb: (frame: WorldSyncFrame) => void): () => void {

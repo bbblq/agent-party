@@ -10,6 +10,10 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Adicionado
+
+- **Mapas personalizados (até 512×512), Oficina de Mapas (`🗺️ 地图工坊`) e servidor MCP integrado (`/api/mcp`).** Suporte a mesas e cadeiras nas 4 direções (`desk_east`/`desk_west`, `office_chair_left`/`office_chair_right`), tapete de entrada sem elevador (`entrance_mat`), renderização por chunks e minimapa no cliente, edição visual com seleção por caixa para IA via sessão Studio (`ws_`) e troca em tempo real entre modo automático e mapas enviados no painel `/admin`.
+
 ## [1.0.3] - 2026-10-16
 
 ### Corrigido

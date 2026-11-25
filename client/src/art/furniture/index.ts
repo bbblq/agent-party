@@ -10,6 +10,8 @@ import * as W from './wall';
 export const SEED_VARIATIONS: Partial<Record<FurnitureKind, number>> = {
   desk: 6,
   desk_back: 4,
+  desk_east: 3,
+  desk_west: 3,
   bookshelf: 4,
   binder_shelf: 4,
   meeting_table: 2,
@@ -37,10 +39,20 @@ function build(kind: FurnitureKind, variant: string | undefined, state: number, 
       return O.desk(variant, seed);
     case 'desk_back':
       return O.deskBack(variant, seed);
+    case 'desk_east':
+      return O.deskEast(variant, seed);
+    case 'desk_west':
+      return O.deskWest(variant, seed);
     case 'office_chair':
       return O.officeChair(variant);
     case 'office_chair_front':
       return O.officeChairFront(variant);
+    case 'office_chair_left':
+      return O.officeChairSide(variant, 'left');
+    case 'office_chair_right':
+      return O.officeChairSide(variant, 'right');
+    case 'entrance_mat':
+      return O.entranceMat(variant);
     case 'bookshelf':
       return O.bookshelf(seed);
     case 'filing_cabinet':

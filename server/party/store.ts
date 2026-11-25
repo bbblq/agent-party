@@ -14,6 +14,7 @@ import { hash32 } from '../../shared/hash';
 import type { Activity, AgentInfo, AgentPetInfo, AgentStatus, ArenaChampionRecord, ArenaLeaderboardEntry, OfficeGlobalSettings, OfficeSnapshot, RoomInfo } from '../../shared/types';
 import type { PetRegistry } from './pets';
 import { sanitizePetId } from './pets';
+import type { MapManager } from './map-manager';
 
 export type ReportStatus = 'working' | 'idle' | 'waiting' | 'offline' | 'session-end';
 
@@ -37,6 +38,8 @@ export interface MemberRecord {
   editToken?: string;
   canDuel?: boolean;
   agentTool?: string;
+  preferredZoneId?: string;
+  preferredSpotId?: string;
   isNpc?: true;
   npcAuto?: boolean;
   npcNextToggleAt?: number;
@@ -178,6 +181,7 @@ export interface StoreConfig {
   workingTimeoutMs?: number;
   offlineTimeoutMs?: number;
   pets: PetRegistry;
+  mapManager?: MapManager;
 }
 
 const VALID_REPORT_STATUSES = new Set<string>(['working', 'idle', 'waiting', 'offline', 'session-end']);
@@ -229,6 +233,7 @@ export class PartyStore {
   private rev = 1;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private dirty = false;
+  private mapManager?: MapManager;
 
   constructor(cfg: StoreConfig) {
     mkdirSync(cfg.dataDir, { recursive: true });
@@ -236,7 +241,16 @@ export class PartyStore {
     this.workingTimeoutMs = cfg.workingTimeoutMs ?? Number(process.env.WORKING_TIMEOUT_MS || 5 * 60_000);
     this.offlineTimeoutMs = cfg.offlineTimeoutMs ?? Number(process.env.OFFLINE_TIMEOUT_MS || 7 * 24 * 60 * 60_000);
     this.pets = cfg.pets;
+    this.mapManager = cfg.mapManager;
     this.load();
+  }
+
+  setMapManager(m: MapManager): void {
+    this.mapManager = m;
+  }
+
+  notifyMapChange(): void {
+    this.emit();
   }
 
   private generateUniqueEditToken(): string {
@@ -1341,6 +1355,7 @@ export class PartyStore {
         effectiveReceptionSign: this.getReceptionSign(),
         officeSettings: this.getOfficeSettings(),
       },
+      maps: this.mapManager?.getPublicState() ?? null,
     };
   }
 
@@ -1356,25 +1371,56 @@ export class PartyStore {
       .sort((a, b) => a.joinedAt - b.joinedAt);
 
     const primary = online.filter((m) => !m.ownerId);
-    const DESKS_PER_ROOM = 6;
-    const roomCount = Math.max(1, Math.ceil(primary.length / DESKS_PER_ROOM));
+    const activeDoc = this.mapManager?.getMode() === 'custom' ? this.mapManager.getActiveDoc() : null;
     const rooms: RoomInfo[] = [];
-    for (let i = 0; i < roomCount; i++) {
-      rooms.push({
-        id: i === 0 ? 'office-main' : `office-${i + 1}`,
-        name: i === 0 ? '办公区' : `办公区 ${i + 1}`,
-        path: i === 0 ? '/office' : `/office-${i + 1}`,
-        slot: i,
-        seed: 42 + i * 17,
-        createdAt: this.startedAt,
+    const ownerRoomById = new Map<string, string>();
+
+    if (activeDoc) {
+      const customRooms = activeDoc.zones.filter((z) => z.kind === 'room');
+      if (customRooms.length > 0) {
+        customRooms.forEach((z, idx) => {
+          rooms.push({
+            id: z.id,
+            name: z.name || `办公区 ${idx + 1}`,
+            path: `/custom/${z.id}`,
+            slot: idx,
+            seed: hash32(z.id) || 42 + idx * 17,
+            createdAt: this.startedAt,
+          });
+        });
+      } else {
+        rooms.push({
+          id: 'custom:common',
+          name: activeDoc.name || '主办公区',
+          path: '/custom/common',
+          slot: 0,
+          seed: 42,
+          createdAt: this.startedAt,
+        });
+      }
+      const roomIds = new Set(rooms.map((r) => r.id));
+      primary.forEach((m, idx) => {
+        const preferred = m.preferredZoneId && roomIds.has(m.preferredZoneId) ? m.preferredZoneId : undefined;
+        ownerRoomById.set(m.id, preferred ?? rooms[idx % rooms.length].id);
+      });
+    } else {
+      const DESKS_PER_ROOM = 6;
+      const roomCount = Math.max(1, Math.ceil(primary.length / DESKS_PER_ROOM));
+      for (let i = 0; i < roomCount; i++) {
+        rooms.push({
+          id: i === 0 ? 'office-main' : `office-${i + 1}`,
+          name: i === 0 ? '办公区' : `办公区 ${i + 1}`,
+          path: i === 0 ? '/office' : `/office-${i + 1}`,
+          slot: i,
+          seed: 42 + i * 17,
+          createdAt: this.startedAt,
+        });
+      }
+      primary.forEach((m, idx) => {
+        const roomIdx = Math.floor(idx / DESKS_PER_ROOM);
+        ownerRoomById.set(m.id, rooms[roomIdx]?.id ?? 'office-main');
       });
     }
-
-    const ownerRoomById = new Map<string, string>();
-    primary.forEach((m, idx) => {
-      const roomIdx = Math.floor(idx / DESKS_PER_ROOM);
-      ownerRoomById.set(m.id, rooms[roomIdx]?.id ?? 'office-main');
-    });
 
     const agents: AgentInfo[] = online.map((m) => {
       const roomId = m.ownerId
@@ -1408,6 +1454,8 @@ export class PartyStore {
         ...(m.ownerId ? { ownerId: m.ownerId } : {}),
         canDuel: this.effectiveCanDuel(m),
         ...(m.agentTool ? { agentTool: m.agentTool } : {}),
+        ...(m.preferredZoneId ? { preferredZoneId: m.preferredZoneId } : {}),
+        ...(m.preferredSpotId ? { preferredSpotId: m.preferredSpotId } : {}),
       };
     });
 
@@ -1425,6 +1473,9 @@ export class PartyStore {
         receptionSign: this.getReceptionSign(),
         officeSettings: this.getOfficeSettings(),
         terminal: false,
+        mapMode: this.mapManager?.getMode() ?? 'auto',
+        activeMapId: this.mapManager?.getActiveMapId() ?? undefined,
+        customMapRev: this.mapManager?.getRev() ?? 1,
       },
     };
   }

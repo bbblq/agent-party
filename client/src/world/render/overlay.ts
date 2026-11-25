@@ -445,6 +445,8 @@ export class Overlay {
         this.drawRoomPill(room.info.name, cx, cy, colW - 8, room.accounts, this.countIn(room.id), room.theme.accent, room.lightOn);
       } else if (CORE_NAMES[vis.id]) {
         this.drawCorePill(CORE_NAMES[vis.id], cx, cy, colW - 8);
+      } else if (this.sim.customMap && vis.id !== 'custom:common') {
+        this.drawCorePill(this.sim.zoneName(vis.id) ?? vis.id, cx, cy, colW - 8);
       }
     }
   }

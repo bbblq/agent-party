@@ -916,4 +916,21 @@ describe('editor do personagem (arte)', () => {
     expect(fitToOptions(ok).top).toBe('#e2604f');
     expect(fitToOptions({ ...ok, accessory: 'sunglasses', accessoryColor: '#e2604f' }).accessoryColor).toBe('#22232b');
   });
+
+  it('4向办公桌椅与入口地垫可正常生成像素精灵与屏幕区域', () => {
+    for (const kind of ['desk_east', 'desk_west'] as const) {
+      const sp = renderFurniture(kind, 'wood', 0, 11);
+      expect(sp?.base.buf.w).toBeGreaterThanOrEqual(16);
+      expect(sp?.base.buf.h).toBeGreaterThanOrEqual(32);
+      expect(sp?.base.rects?.screen).toBeDefined();
+      expect(sp?.base.buf.countOpaque()).toBeGreaterThan(80);
+    }
+    for (const kind of ['office_chair_left', 'office_chair_right'] as const) {
+      const sp = renderFurniture(kind, 'blue', 0, 12);
+      expect(sp?.base.buf.countOpaque()).toBeGreaterThan(40);
+    }
+    const mat = renderFurniture('entrance_mat', 'blue', 0, 13);
+    expect(mat?.base.buf.w).toBeGreaterThanOrEqual(32);
+    expect(mat?.base.buf.countOpaque()).toBeGreaterThan(60);
+  });
 });

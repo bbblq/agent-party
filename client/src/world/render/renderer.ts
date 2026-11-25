@@ -25,6 +25,8 @@ import { carSprite, propSprite, shadowSprite } from './props';
 import { drawCodexPetFrame } from './pet-sprites';
 import { countBadge, fallbackIcon } from './shell-sprites';
 import { decorateElevator, drawSeasonalLights, drawSeasonalWindow, seasonalCostume, seasonalFurniture } from './seasonal';
+import { makeCustomPlaceholderVis } from './custom-area-vis';
+import { CustomChunkCache } from './custom-chunks';
 import { buildAreaVis, furnitureSprites, opaqueBounds, paintShell, toWallVis, WALL_MARGIN, wallItemOrigin, wallSprites, type AreaVis, type FurnVis, type WallVis } from './scene';
 
 const enum K {
@@ -122,6 +124,8 @@ export class Renderer {
   private grass: CanvasPattern | null = null;
   private theme: SeasonalTheme = 'none';
   private arenaFxTracker: ArenaFxTracker = { lastFxId: 0, lastWinnerMatchId: 0 };
+  readonly customChunks = new CustomChunkCache();
+  private wasCustom = false;
 
   constructor(
     readonly canvas: HTMLCanvasElement,
@@ -139,6 +143,14 @@ export class Renderer {
     this.assetsVersion++;
   }
 
+  getOverviewCanvas(): HTMLCanvasElement | null {
+    return this.sim.building.custom ? this.customChunks.getOverviewCanvas() : this.base;
+  }
+
+  invalidateCustomRect(tileRect?: { x: number; y: number; w: number; h: number }): void {
+    if (this.sim.building.custom) this.customChunks.invalidateRect(tileRect);
+  }
+
   // =================================================================== sincronização com a simulação
 
   /** Mantém caches e visuais coerentes com o prédio atual. */
@@ -147,6 +159,47 @@ export class Renderer {
     const themeChanged = theme !== this.theme;
     this.theme = theme;
     const assetsChanged = this.builtAssetsVersion !== this.assetsVersion || themeChanged;
+    if (sim.building.custom) {
+      this.wasCustom = true;
+      this.baseCols = -1;
+      this.base = null;
+      this.shells = [];
+      this.shellWindows = [];
+      this.cars = [];
+      this.clearColor = '#5a8347';
+      const mw = sim.building.mapWidth ?? sim.building.rect?.w ?? sim.building.cols * COL_W;
+      const mh = sim.building.mapHeight ?? sim.building.rect?.h ?? BUILDING_H;
+      this.exterior = { bounds: { x: 0, y: 0, w: mw, h: mh }, floors: [], props: [], streetY: mh * TILE, streetH: 0, lanes: [] };
+      this.customChunks.sync(sim.building, theme, this.assets, this.assetsVersion);
+      if (this.layoutVersion !== sim.layoutVersion || assetsChanged) {
+        this.layoutVersion = sim.layoutVersion;
+        const want = new Set<string>();
+        const elevs: WallVis[] = [];
+        for (const a of [...sim.building.core, ...sim.building.rooms]) {
+          if (want.has(a.id)) continue;
+          want.add(a.id);
+          const room = a.kind === 'room' ? sim.rooms.get(a.id) : undefined;
+          const vis = makeCustomPlaceholderVis(this.art, a, room);
+          this.areas.set(a.id, vis);
+          for (const w of vis.wallItems) if (w.kind === 'elevator') elevs.push(w);
+        }
+        for (const id of [...this.areas.keys()]) if (!want.has(id)) this.areas.delete(id);
+        this.elevatorVis = elevs;
+      } else {
+        for (const vis of this.areas.values()) {
+          if (vis.layout.kind === 'room') vis.room = sim.rooms.get(vis.id);
+        }
+      }
+      this.occupiedSlots.clear();
+      this.builtAssetsVersion = this.assetsVersion;
+      return;
+    }
+    if (this.wasCustom) {
+      this.wasCustom = false;
+      this.baseCols = -1;
+      this.layoutVersion = -1;
+      this.areas.clear();
+    }
     if (this.baseCols !== sim.building.cols || assetsChanged) this.buildBase();
     if (this.layoutVersion !== sim.layoutVersion || assetsChanged) {
       this.layoutVersion = sim.layoutVersion;
@@ -329,9 +382,10 @@ export class Renderer {
 
   frame(now: number, dt: number, opts: WorldOptions, sel: { agent: string | null; room: string | null; hover: string | null }): void {
     const { ctx, camera } = this;
+    const isCustom = !!this.sim.building.custom;
     this.date.setTime(this.clock());
     this.dt = dt;
-    this.updateCars(now, dt);
+    if (!isCustom) this.updateCars(now, dt);
     const W = this.canvas.width;
     const H = this.canvas.height;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -378,20 +432,26 @@ export class Renderer {
     const t = now;
 
     // janelas da fachada nos slots vazios
-    for (const w of this.shellWindows) {
-      const slot = Number(w.areaId.slice(6));
-      const room = this.roomInSlot(slot);
-      if (room && room.phase === 'ready') continue;
-      if (!visible(w.cx - 24, w.baseY - 40, 48, 44)) continue;
-      this.drawWindow(w, hour, t, 1);
+    if (!isCustom) {
+      for (const w of this.shellWindows) {
+        const slot = Number(w.areaId.slice(6));
+        const room = this.roomInSlot(slot);
+        if (room && room.phase === 'ready') continue;
+        if (!visible(w.cx - 24, w.baseY - 40, 48, 44)) continue;
+        this.drawWindow(w, hour, t, 1);
+      }
     }
 
     // ---- áreas: piso, paredes e itens de parede
-    for (const vis of this.areas.values()) {
-      const p = vis.px;
-      if (!visible(p.x, p.y - WALL_MARGIN, p.w, p.h + WALL_MARGIN)) continue;
-      const anim = vis.room ? buildAnim(vis.room.phase, vis.room.progress(now)) : NO_ANIM;
-      this.drawFloor(vis, anim);
+    if (isCustom) {
+      this.customChunks.drawFloors(this.art, ctx, vx0, vy0, vx1, vy1, scale);
+    } else {
+      for (const vis of this.areas.values()) {
+        const p = vis.px;
+        if (!visible(p.x, p.y - WALL_MARGIN, p.w, p.h + WALL_MARGIN)) continue;
+        const anim = vis.room ? buildAnim(vis.room.phase, vis.room.progress(now)) : NO_ANIM;
+        this.drawFloor(vis, anim);
+      }
     }
     const arenaArea = this.sim.building.arena;
     if (arenaArea) {
@@ -400,11 +460,21 @@ export class Renderer {
         drawArenaFloor(ctx, ar, this.sim.arena.state, now);
       }
     }
-    for (const vis of this.areas.values()) {
-      const p = vis.px;
-      if (!visible(p.x, p.y - WALL_MARGIN, p.w, p.h + WALL_MARGIN)) continue;
-      const anim = vis.room ? buildAnim(vis.room.phase, vis.room.progress(now)) : NO_ANIM;
-      this.drawWalls(vis, anim, now, hour);
+    if (isCustom) {
+      this.customChunks.drawWalls(this.art, ctx, vx0, vy0, vx1, vy1, scale);
+      for (const vis of this.areas.values()) {
+        const p = vis.px;
+        if (!visible(p.x, p.y - WALL_MARGIN, p.w, p.h + WALL_MARGIN)) continue;
+        for (const w of vis.wallItems) this.drawWallItem(vis, w, now, hour, 0);
+        if (vis.sign) this.drawSign(vis, vis.sign, 0);
+      }
+    } else {
+      for (const vis of this.areas.values()) {
+        const p = vis.px;
+        if (!visible(p.x, p.y - WALL_MARGIN, p.w, p.h + WALL_MARGIN)) continue;
+        const anim = vis.room ? buildAnim(vis.room.phase, vis.room.progress(now)) : NO_ANIM;
+        this.drawWalls(vis, anim, now, hour);
+      }
     }
     if (arenaArea) {
       const ar = arenaArea.rect;
@@ -460,41 +530,43 @@ export class Renderer {
       }
       push(K.Char, ch.depth(), ch, null, 1);
     }
-    const arenaSlot = slotAt(this.sim.building.cols - 1, 'south');
-    for (const prop of this.exterior.props) {
-      if (!visible(prop.x - 24, prop.y - 56, 48, 60)) continue;
-      let alpha = 1;
-      if (prop.whenRoom !== undefined) {
-        if (prop.whenRoom === arenaSlot) {
-          alpha = 1;
-        } else {
-          // ex.: cerca viva diante do caminho do jardim — surge junto com a sala
-          const room = this.roomInSlot(prop.whenRoom);
-          if (!room) continue;
-          if (room.phase === 'building' || room.phase === 'dismantling') {
-            const pr = room.progress(now);
-            alpha = room.phase === 'building' ? Math.min(1, pr * 3) : 1 - Math.min(1, Math.max(0, (pr - 0.75) * 4));
-            if (alpha <= 0.02) continue;
+    if (!isCustom) {
+      const arenaSlot = slotAt(this.sim.building.cols - 1, 'south');
+      for (const prop of this.exterior.props) {
+        if (!visible(prop.x - 24, prop.y - 56, 48, 60)) continue;
+        let alpha = 1;
+        if (prop.whenRoom !== undefined) {
+          if (prop.whenRoom === arenaSlot) {
+            alpha = 1;
+          } else {
+            // ex.: cerca viva diante do caminho do jardim — surge junto com a sala
+            const room = this.roomInSlot(prop.whenRoom);
+            if (!room) continue;
+            if (room.phase === 'building' || room.phase === 'dismantling') {
+              const pr = room.progress(now);
+              alpha = room.phase === 'building' ? Math.min(1, pr * 3) : 1 - Math.min(1, Math.max(0, (pr - 0.75) * 4));
+              if (alpha <= 0.02) continue;
+            }
           }
         }
-      }
-      push(K.Prop, prop.y, prop, null, alpha);
-    }
-    for (const sh of this.shells) {
-      const room = this.roomInSlot(sh.slot);
-      let alpha = 1;
-      if (room) {
-        if (room.phase !== 'building' && room.phase !== 'dismantling') continue;
-        const pr = room.progress(now);
-        alpha = room.phase === 'building' ? 1 - Math.min(1, pr * 3) : Math.min(1, Math.max(0, (pr - 0.75) * 4));
-        if (alpha <= 0.02) continue;
-      }
-      for (const prop of sh.props) {
-        if (!visible(prop.x - 24, prop.y - 56, 48, 60)) continue;
         push(K.Prop, prop.y, prop, null, alpha);
       }
+      for (const sh of this.shells) {
+        const room = this.roomInSlot(sh.slot);
+        let alpha = 1;
+        if (room) {
+          if (room.phase !== 'building' && room.phase !== 'dismantling') continue;
+          const pr = room.progress(now);
+          alpha = room.phase === 'building' ? 1 - Math.min(1, pr * 3) : Math.min(1, Math.max(0, (pr - 0.75) * 4));
+          if (alpha <= 0.02) continue;
+        }
+        for (const prop of sh.props) {
+          if (!visible(prop.x - 24, prop.y - 56, 48, 60)) continue;
+          push(K.Prop, prop.y, prop, null, alpha);
+        }
+      }
+      for (const car of this.cars) if (visible(car.x - 24, car.y - 24, 48, 28)) push(K.Car, car.y, car, null, 1);
     }
-    for (const car of this.cars) if (visible(car.x - 24, car.y - 24, 48, 28)) push(K.Car, car.y, car, null, 1);
     ents.sort((a, b) => a.y - b.y || a.k - b.k);
 
     this.iconCount = 0;
@@ -819,7 +891,7 @@ export class Renderer {
     }
     ctx.drawImage(s.canvas, dx, dy);
     if (!front) {
-      if (f.kind === 'desk' && s.rects?.screen) {
+      if ((f.kind === 'desk' || f.kind === 'desk_east' || f.kind === 'desk_west') && s.rects?.screen) {
         const r = s.rects.screen;
         const mode = this.deskScreen(f, area);
         this.safe(() => this.art.drawScreen(ctx, { x: dx + r.x, y: dy + r.y, w: r.w, h: r.h }, mode, now, f.seed));

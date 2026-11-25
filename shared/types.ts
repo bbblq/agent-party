@@ -8,6 +8,7 @@ import type { AppearanceParts } from './appearance';
 import type { WorldMeta } from './world/api';
 
 export type AgentKind = 'main' | 'sub';
+export type MapMode = 'auto' | 'custom';
 
 /**
  * De qual ferramenta vem o agente (ou a conta, a fonte, a sessão, o pedido). Nos tipos do protocolo o campo
@@ -182,6 +183,9 @@ export interface AgentInfo {
   canDuel?: boolean;
   /** Specific AI agent tool used by this member (e.g. Codex, Antigravity, WorkBuddy, Claude Code). */
   agentTool?: string;
+  /** Optional extensibility hooks for future per-member zone/seat pinning. */
+  preferredZoneId?: string;
+  preferredSpotId?: string;
   /** Subagente rodando em segundo plano. */
   background?: boolean;
   /**
@@ -361,6 +365,10 @@ export interface OfficeSnapshot {
     version: string;
     receptionSign?: string;
     officeSettings?: OfficeGlobalSettings;
+    /** Active map mode & revision (custom map payload fetched on demand via GET /api/map). */
+    mapMode?: MapMode;
+    activeMapId?: string;
+    customMapRev?: number;
     /**
      * Identificador do build do cliente que o servidor está servindo (nome do bundle, ex.: "main-BFqheOCa").
      * Uma página aberta com outro build está desatualizada e deve se recarregar. Ausente no modo dev.

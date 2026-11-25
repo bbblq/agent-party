@@ -194,6 +194,105 @@ export function deskBack(variant: string | undefined, seed: number): BufFurnitur
   return { base: s };
 }
 
+/** Teclado vertical (para mesas orientadas leste/oeste). */
+function keyboardVertical(b: PixelBuf, x: number, y: number, h: number, tone: DeskItemTone): void {
+  const pal =
+    tone === 'dark'
+      ? { base: '#3d4250', key: '#5a6070', edge: '#2a2e38' }
+      : tone === 'onLight'
+        ? { base: '#b9c0cc', key: '#e4e8ee', edge: '#7d8696' }
+        : { base: '#d9dce2', key: '#f4f5f7', edge: '#a9aeb8' };
+  b.rect(x, y, 3, h, pal.base);
+  for (let i = 0; i < h - 1; i += 2) {
+    b.set(x + 1, y + i, pal.key);
+    b.set(x, y + i + 1, pal.key);
+  }
+  b.vline(x + 2, y, y + h - 1, pal.edge);
+}
+
+/** Corpo de mesa lateral 1x2 (eixo norte-sul). */
+function sideDeskBody(s: BufSprite, m: DeskMats, seed: number): void {
+  const b = s.buf;
+  // Pernas nos cantos inferiores e traseiros.
+  for (const x of [1, 12]) {
+    b.rect(x, 22, 3, 10, m.legs.base);
+    b.vline(x, 22, 31, m.legs.lt);
+    b.vline(x + 2, 22, 31, m.legs.dk);
+    b.hline(x, x + 2, 31, m.legs.dd);
+  }
+  // Painel lateral frontal sutil.
+  frontFace(b, 3, 21, 10, 4, m.ped);
+  // Tampo vertical (14x24) + espessura frontal (2px).
+  topFace(b, 1, -2, 14, 23, m.top);
+  woodGrain(b, 2, -1, 12, 21, m.top, seed, true);
+  b.hline(1, 14, 21, m.edge.base);
+  b.hline(1, 14, 22, m.edge.dk);
+  b.set(1, 21, m.edge.lt);
+}
+
+function sideDeskScreen(b: PixelBuf, x: number, y: number, w: number, h: number, facingEast: boolean): Box {
+  const body = '#2c313d';
+  b.rect(x, y, w, h, body);
+  b.hline(x, x + w - 1, y, '#3e4554');
+  b.hline(x, x + w - 1, y + h - 1, '#232732');
+  // Base / suporte lateral.
+  const sx = facingEast ? x + 2 : x + 1;
+  const sw = w - 3;
+  const sy = y + 1;
+  const sh = h - 2;
+  b.rect(sx, sy, sw, sh, '#22324f');
+  b.rect(sx, sy, sw, 1, '#2a3d5f');
+  b.set(x + (facingEast ? 0 : w - 1), y + h - 1, '#5fd07a');
+  const standX = facingEast ? x + 1 : x + w - 3;
+  b.rect(standX, y + h, 2, 2, '#4a5060');
+  b.rect(standX - 1, y + h + 2, 4, 1, '#5b6272');
+  return { x: sx, y: sy, w: sw, h: sh };
+}
+
+export function deskEast(variant: string | undefined, seed: number): BufFurniture {
+  const s = floorSheet(1, 2, 12, 4, 4);
+  const m = deskMats(variant);
+  const b = s.buf;
+  const tone = itemTone(variant);
+  const r = rngOf(seed, 14);
+  const mugC = pick(r, MUG_COLORS);
+  sideDeskBody(s, m, seed);
+  // Monitor à oeste virado para leste (trabalhador senta à direita, olhando para a esquerda).
+  const scr = sideDeskScreen(b, 2, 1, 7, 12, true);
+  keyboardVertical(b, 10, 5, 9, tone);
+  mouse(b, 11, 16, tone);
+  if (seed % 3 === 0) mug(b, 4, 16, mugC);
+  else if (seed % 3 === 1) smallSucculent(b, 4, 17);
+  else papers(b, 3, 15, 5, 4, tone);
+  b.outline();
+  underRect(b, 4, 25, 8, 6, 'rgba(30,34,52,0.18)');
+  contact(b, 0, 29, 16, 4, 0.2);
+  s.rects = { screen: rectAt(s, scr.x, scr.y, scr.w, scr.h) };
+  return { base: s };
+}
+
+export function deskWest(variant: string | undefined, seed: number): BufFurniture {
+  const s = floorSheet(1, 2, 12, 4, 4);
+  const m = deskMats(variant);
+  const b = s.buf;
+  const tone = itemTone(variant);
+  const r = rngOf(seed, 15);
+  const mugC = pick(r, MUG_COLORS);
+  sideDeskBody(s, m, seed);
+  // Monitor à leste virado para oeste (trabalhador senta à esquerda, olhando para a direita).
+  const scr = sideDeskScreen(b, 7, 1, 7, 12, false);
+  keyboardVertical(b, 3, 5, 9, tone);
+  mouse(b, 3, 16, tone);
+  if (seed % 3 === 0) mug(b, 8, 16, mugC);
+  else if (seed % 3 === 1) smallSucculent(b, 8, 17);
+  else papers(b, 8, 15, 5, 4, tone);
+  b.outline();
+  underRect(b, 4, 25, 8, 6, 'rgba(30,34,52,0.18)');
+  contact(b, 0, 29, 16, 4, 0.2);
+  s.rects = { screen: rectAt(s, scr.x, scr.y, scr.w, scr.h) };
+  return { base: s };
+}
+
 // ------------------------------------------------------------------ cadeiras
 
 const CHAIR_COLORS: Readonly<Record<string, string>> = {
@@ -279,6 +378,55 @@ export function officeChairFront(variant: string | undefined): BufFurniture {
   }
   b.outline();
   contact(b, 1, 13, 14, 3, 0.22);
+  return { base: s };
+}
+
+export function officeChairSide(variant: string | undefined, dir: 'left' | 'right'): BufFurniture {
+  const c = chairRamp(variant);
+  const s = floorSheet(1, 1, 10, 4, 3);
+  const b = s.buf;
+  starBase(b);
+  // Assento.
+  b.rect(2, 5, 12, 5, c.lt);
+  b.hline(3, 12, 5, c.hi);
+  b.hline(2, 13, 9, c.dk);
+  b.hline(2, 13, 10, c.dd);
+  // Encosto lateral (à direita quando olha para a esquerda; à esquerda quando olha para a direita).
+  const bx = dir === 'left' ? 11 : 1;
+  b.rect(bx, -6, 4, 15, c.base);
+  b.hline(bx, bx + 3, -6, c.lt);
+  b.hline(bx + 1, bx + 2, -6, c.hi);
+  b.vline(bx, -5, 8, dir === 'left' ? c.lt : c.hi);
+  b.vline(bx + 3, -5, 8, c.dk);
+  b.hline(bx, bx + 3, 8, c.dd);
+  // Apoio de braço discreto.
+  const ax = dir === 'left' ? 5 : 7;
+  b.rect(ax, 3, 4, 2, '#3a3f4b');
+  b.hline(ax, ax + 3, 3, '#5a6070');
+  b.outline();
+  contact(b, 1, 13, 14, 3, 0.22);
+  return { base: s };
+}
+
+export function entranceMat(variant: string | undefined): BufFurniture {
+  const s = floorSheet(2, 1, 2, 2, 2);
+  const b = s.buf;
+  const pal =
+    variant === 'warm'
+      ? ramp('#a45a46', 0.06)
+      : variant === 'blue'
+        ? ramp('#3f629a', 0.06)
+        : ramp('#4a5262', 0.06);
+  b.rect(1, 2, 30, 12, pal.dk);
+  b.rect(2, 3, 28, 10, pal.base);
+  b.hline(2, 29, 3, pal.lt);
+  b.hline(2, 29, 12, pal.dd);
+  // Detalhe de listras sutis e seta central.
+  for (let y = 5; y <= 10; y += 2) b.hline(4, 27, y, pal.lt);
+  b.rect(13, 6, 6, 4, '#e7d9b8');
+  b.hline(14, 17, 7, pal.dk);
+  b.outline();
+  contact(b, 1, 13, 30, 2, 0.14);
   return { base: s };
 }
 

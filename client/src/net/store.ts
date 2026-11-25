@@ -99,9 +99,11 @@ export function mockOptionsFrom(search: string): { speed: number; sessions: numb
   };
 }
 
-function getSessionAdminKey(): string {
+export function getSessionAdminKey(): string {
   try {
-    return typeof sessionStorage !== 'undefined' ? (sessionStorage.getItem('agent_party_admin_key') || '') : '';
+    const ss = typeof sessionStorage !== 'undefined' ? (sessionStorage.getItem('agent_party_admin_key') || '') : '';
+    if (ss) return ss;
+    return typeof localStorage !== 'undefined' ? (localStorage.getItem('agent_party_admin_key') || '') : '';
   } catch {
     return '';
   }

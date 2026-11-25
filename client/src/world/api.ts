@@ -2,6 +2,7 @@
 // Implementação: client/src/world/index.ts -> createWorld().
 // Regra: mudanças aqui devem ser ADITIVAS.
 import { beijingParts } from '../../../shared/beijing';
+import type { CustomMapDocument } from '../../../shared/map';
 
 export type Selection = { type: 'agent'; id: string } | { type: 'room'; id: string } | null;
 
@@ -99,7 +100,26 @@ export interface WorldApi {
    * câmera; ao voltar, a simulação avança o tempo que passou (como com a aba em segundo plano).
    */
   setSuspended?(suspended: boolean): void;
+  /** (Opcional, aditivo) 地图工坊与小地图桥接接口 */
+  editor?: WorldEditorBridge;
   destroy(): void;
+}
+
+export interface WorldEditorBridge {
+  setCustomMapPreview(doc: CustomMapDocument | null, opts?: { lockLiveSync?: boolean }): void;
+  getCustomMap(): CustomMapDocument | null;
+  invalidateRect(tileRect?: { x: number; y: number; w: number; h: number }): void;
+  getOverviewCanvas(): HTMLCanvasElement | null;
+  getMapBounds(): { w: number; h: number; custom: boolean };
+  getViewportWorldRect(): { x: number; y: number; w: number; h: number; zoom: number };
+  panToWorld(wx: number, wy: number): void;
+  screenToTile(clientX: number, clientY: number): { tx: number; ty: number; wx: number; wy: number };
+  worldToScreen(wx: number, wy: number): { x: number; y: number; zoom: number };
+  setPointerIntercept(
+    fn: ((ev: PointerEvent, kind: 'down' | 'move' | 'up', tile: { tx: number; ty: number; wx: number; wy: number }) => boolean) | null,
+  ): void;
+  isWalkable(tx: number, ty: number): number;
+  onAfterFrame(cb: (ctx: CanvasRenderingContext2D, view: { zoom: number; ox: number; oy: number; dpr: number }) => void): () => void;
 }
 
 /** Relógios do timelapse (ver world/playback.ts). */

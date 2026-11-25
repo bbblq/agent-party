@@ -473,6 +473,52 @@ export function renderAdminHtml(): string {
       </div>
 
       <div class="card">
+        <h2>🗺️ 地图模式与预设版本管理（支持最大 512×512）</h2>
+        <p class="muted" style="margin-top:0">
+          切换全局线上地图仅限管理员操作。普通成员可在主界面打开<strong>「🗺️ 地图工坊」</strong>或使用支持 MCP 的 AI 框选编辑并下载 <code>.json</code> 发给您上传。
+        </p>
+        <div class="row" style="align-items:center;margin-bottom:10px">
+          <div>
+            <span class="muted">当前运行模式：</span>
+            <strong id="map-mode-badge">—</strong>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+            <button class="btn" id="map-auto-btn" type="button">🏢 切回默认模式（按人数自动生成）</button>
+            <button class="btn" id="map-copy-mcp-btn" type="button">⚙️ 复制管理员 MCP 配置</button>
+          </div>
+        </div>
+        <div class="row" style="align-items:end;margin-bottom:12px">
+          <div>
+            <label for="map-upload-file">上传自定义地图 (.json)</label>
+            <input id="map-upload-file" type="file" accept=".json,application/json" />
+          </div>
+          <div>
+            <label for="map-upload-name">自定义名称（可选）</label>
+            <input id="map-upload-name" type="text" placeholder="留空沿用文件内名称" />
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;color:var(--text)">
+              <input id="map-upload-activate" type="checkbox" style="width:auto" checked />
+              <span>上传后立即全员启用</span>
+            </label>
+            <button class="btn btn-primary" id="map-upload-btn" type="button">上传并保存</button>
+          </div>
+        </div>
+        <div id="map-msg" class="muted" style="margin-bottom:8px" hidden></div>
+        <table>
+          <thead>
+            <tr>
+              <th>地图名称 / ID</th>
+              <th>尺寸</th>
+              <th>区域 / 工位</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="maps-tbody"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
         <h2>✨ 创建常驻 NPC（人 / 宝可梦 / Codex V2 桌宠）</h2>
         <p class="muted" style="margin-top:0">新建的 NPC 会立刻出现在虚拟办公室中，可以自由摸鱼（打乒乓球、喝咖啡、玩街机）或坐在工位办公。</p>
         <div class="tabs">
@@ -921,11 +967,170 @@ export function renderAdminHtml(): string {
         npcs: data.npcs || [],
         members: data.members || [],
         banned: data.banned || [],
+        maps: data.maps || { mode: 'auto', activeMapId: null, rev: 1, presets: [] },
       };
+      renderMaps();
       renderNpcs();
       renderMembers();
       renderBans();
     }
+
+    function renderMaps() {
+      const ms = adminState.maps || { mode: 'auto', activeMapId: null, rev: 1, presets: [] };
+      const activePreset = (ms.presets || []).find((p) => p.id === ms.activeMapId);
+      $('map-mode-badge').textContent = ms.mode === 'custom' && activePreset
+        ? '自定义地图 · ' + activePreset.name + ' (' + activePreset.width + '×' + activePreset.height + ')'
+        : '默认自动模式（根据在线人数动态扩缩容）';
+      const tbody = $('maps-tbody');
+      const list = ms.presets || [];
+      if (!list.length) {
+        tbody.innerHTML = '<tr><td colspan="4" class="muted">暂无预设地图</td></tr>';
+        return;
+      }
+      tbody.innerHTML = '';
+      for (const p of list) {
+        const isActive = ms.mode === 'custom' && ms.activeMapId === p.id;
+        const tr = document.createElement('tr');
+        const tdName = document.createElement('td');
+        tdName.innerHTML = '<strong>' + esc(p.name) + '</strong>' + (isActive ? ' <span class="badge ok">当前线上生效</span>' : '') + '<div class="muted" style="font-size:12px">' + esc(p.id) + '</div>';
+        const tdSize = document.createElement('td');
+        tdSize.textContent = p.width + ' × ' + p.height + ' 格';
+        const tdStats = document.createElement('td');
+        tdStats.textContent = p.zoneCount + ' 区域 / ' + p.deskCount + ' 工位';
+        const tdAct = document.createElement('td');
+        const btnWrap = document.createElement('div');
+        btnWrap.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap';
+        if (!isActive) {
+          const actBtn = document.createElement('button');
+          actBtn.type = 'button';
+          actBtn.className = 'btn btn-sm btn-primary';
+          actBtn.textContent = '实时启用';
+          actBtn.addEventListener('click', () => void activateMapPreset(p.id));
+          btnWrap.append(actBtn);
+        }
+        const dlBtn = document.createElement('button');
+        dlBtn.type = 'button';
+        dlBtn.className = 'btn btn-sm';
+        dlBtn.textContent = '下载 JSON';
+        dlBtn.addEventListener('click', () => void downloadMapPreset(p.id));
+        btnWrap.append(dlBtn);
+        if (!isActive) {
+          const delBtn = document.createElement('button');
+          delBtn.type = 'button';
+          delBtn.className = 'btn btn-sm btn-danger';
+          delBtn.textContent = '删除';
+          delBtn.addEventListener('click', () => void deleteMapPreset(p.id));
+          btnWrap.append(delBtn);
+        }
+        tdAct.append(btnWrap);
+        tr.append(tdName, tdSize, tdStats, tdAct);
+        tbody.append(tr);
+      }
+    }
+
+    async function activateMapPreset(mapId) {
+      const msg = $('map-msg');
+      msg.hidden = false;
+      msg.textContent = '正在实时切换线上地图…';
+      try {
+        const res = await api('/api/admin/maps/activate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(mapId ? { mode: 'custom', mapId } : { mode: 'auto' }),
+        });
+        if (res && res.maps) {
+          adminState.maps = res.maps;
+          renderMaps();
+          msg.textContent = mapId ? '✅ 已实时切换为自定义地图' : '✅ 已切回默认自动扩容模式';
+        }
+      } catch (err) {
+        msg.textContent = '❌ 切换失败：' + err.message;
+      }
+    }
+
+    async function downloadMapPreset(mapId) {
+      try {
+        const res = await api('/api/admin/maps/' + encodeURIComponent(mapId));
+        if (!res || !res.doc) return;
+        const blob = new Blob([JSON.stringify(res.doc, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = mapId + '.json';
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    async function deleteMapPreset(mapId) {
+      if (!confirm('确认删除地图预设 ' + mapId + ' 吗？')) return;
+      try {
+        const res = await api('/api/admin/maps/' + encodeURIComponent(mapId), { method: 'DELETE' });
+        if (res && res.maps) {
+          adminState.maps = res.maps;
+          renderMaps();
+        }
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    $('map-auto-btn').addEventListener('click', () => void activateMapPreset(null));
+
+    $('map-copy-mcp-btn').addEventListener('click', async () => {
+      const origin = window.location.origin;
+      const cfg = {
+        mcpServers: {
+          'agent-party-map-admin': {
+            url: origin + '/api/mcp',
+            headers: { Authorization: 'Bearer ' + adminKey },
+            stdioFallback: {
+              command: 'node',
+              args: ['scripts/map-mcp.mjs', '--url', origin, '--token', adminKey],
+            },
+          },
+        },
+      };
+      await navigator.clipboard?.writeText(JSON.stringify(cfg, null, 2)).catch(() => {});
+      const msg = $('map-msg');
+      msg.hidden = false;
+      msg.textContent = '✅ 已复制管理员 MCP 配置（含全员切换权限）';
+    });
+
+    $('map-upload-btn').addEventListener('click', async () => {
+      const file = $('map-upload-file').files?.[0];
+      const msg = $('map-msg');
+      if (!file) {
+        msg.hidden = false;
+        msg.textContent = '请先选择一个 .json 地图文件。';
+        return;
+      }
+      try {
+        const text = await file.text();
+        const doc = JSON.parse(text);
+        const customName = $('map-upload-name').value.trim();
+        const activate = $('map-upload-activate').checked;
+        msg.hidden = false;
+        msg.textContent = '正在校验并上传地图…';
+        const res = await api('/api/admin/maps', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ doc, ...(customName ? { name: customName } : {}), activate }),
+        });
+        if (res && res.maps) {
+          adminState.maps = res.maps;
+          renderMaps();
+          msg.textContent = activate ? '✅ 上传成功并已实时设为线上地图' : '✅ 已保存到地图预设列表';
+          $('map-upload-file').value = '';
+          $('map-upload-name').value = '';
+        }
+      } catch (err) {
+        msg.hidden = false;
+        msg.textContent = '❌ 上传失败：' + err.message;
+      }
+    });
 
     async function searchPokeChips(q = '') {
       const res = await fetch('/api/pokemon/search?q=' + encodeURIComponent(q));

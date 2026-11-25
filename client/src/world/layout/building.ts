@@ -7,16 +7,21 @@ import { layoutCafe, layoutLounge, layoutReception, layoutRestroom, layoutArena 
 import { layoutCorridor } from './corridor';
 import { buildingRect } from './geometry';
 import type { AreaLayout, SpotDef, TileRect } from './types';
+import type { CustomMapDocument } from '../../../../shared/map/types';
 
 export interface BuildingLayout {
   cols: number;
   rect: TileRect;
   core: AreaLayout[];
-  arena: AreaLayout;
+  arena: AreaLayout | null;
   corridor: AreaLayout;
   rooms: AreaLayout[];
   grid: WalkGrid;
   spots: SpotDef[];
+  custom?: boolean;
+  mapWidth?: number;
+  mapHeight?: number;
+  customDoc?: CustomMapDocument;
 }
 
 let coreCache: AreaLayout[] | null = null;
