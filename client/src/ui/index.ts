@@ -301,20 +301,19 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   timelapse = new TimelapsePlayer(ctx);
   const minimap = new Minimap(world, store);
   const mapEditor = new MapEditor(ctx, world);
-  topbar.mapStudioBtn.addEventListener('click', () => {
-    void mapEditor.toggle();
-  });
   const scrim = h('div', { class: 'ui-scrim', attrs: { 'aria-hidden': 'true' }, on: { click: () => ctx.togglePanel('sidebar', false) } });
 
   root.classList.add('ui-root');
-  root.append(timelapse.vignette, topbar.el, sidebar.el, scrim, feed.el, drawer.el, terminal.el, pty.el, timelapse.el, timelapse.badge, minimap.el, mapEditor.reviewFloatEl, mapEditor.el, toasts.el, banner.el, empty.el, tip.el, settings.el, help.el, renamer.el, live, splash.el);
-  area = new FreeArea(world, { root, topbar: topbar.el, sidebar: sidebar.el, drawer: drawer.el, feed: feed.el }, () => ({
-    sidebar: panels.sidebar,
-    feed: panels.feed,
+  root.append(timelapse.vignette, topbar.el, sidebar.el, scrim, feed.el, drawer.el, terminal.el, pty.el, timelapse.el, timelapse.badge, minimap.el, mapEditor.reviewFloatEl, mapEditor.menuBarEl, mapEditor.contextBarEl, mapEditor.viewportTabsEl, mapEditor.viewportStatusEl, mapEditor.toolbarEl, mapEditor.el, mapEditor.aiDockEl, toasts.el, banner.el, empty.el, tip.el, settings.el, help.el, renamer.el, live, splash.el);
+  area = new FreeArea(world, { root, topbar: topbar.el, sidebar: sidebar.el, drawer: drawer.el, feed: feed.el, studio: mapEditor.el, studioToolbar: mapEditor.toolbarEl, studioViewportBar: mapEditor.viewportTabsEl, studioAiDock: mapEditor.aiDockEl }, () => ({
+    sidebar: panels.sidebar && !mapEditor.opened,
+    feed: panels.feed && !mapEditor.opened,
     drawer: selection !== null && !drawer.floating,
+    studio: mapEditor.opened,
     narrow: ctx.isNarrow(),
   }));
   drawer.onLayoutChange = () => applyLayout();
+  mapEditor.onLayoutChange = () => applyLayout();
 
   const components: UiComponent[] = [topbar, sidebar, drawer, toasts, settings, empty, banner, tip, notifier, splash, sound, minimap];
   attachStudioQueryMode(mapEditor, ctx);
@@ -349,9 +348,11 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
 
   /** Aplica as classes de layout e informa ao mundo a área livre (sem esperar as transições dos painéis). */
   function applyLayout(opts: { refocus?: boolean } = {}): void {
-    root.classList.toggle('has-sidebar', panels.sidebar);
-    root.classList.toggle('has-feed', panels.feed);
+    root.classList.toggle('has-sidebar', panels.sidebar && !mapEditor.opened);
+    root.classList.toggle('has-feed', panels.feed && !mapEditor.opened);
     root.classList.toggle('has-drawer', selection !== null && !drawer.floating);
+    root.classList.toggle('is-studio-open', mapEditor.opened);
+    root.classList.toggle('is-studio-collapsed', mapEditor.panelCollapsed);
     root.classList.toggle('is-narrow', ctx.isNarrow());
     area.sync(opts);
   }

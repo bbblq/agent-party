@@ -110,15 +110,22 @@ export interface WorldEditorBridge {
   getCustomMap(): CustomMapDocument | null;
   invalidateRect(tileRect?: { x: number; y: number; w: number; h: number }): void;
   getOverviewCanvas(): HTMLCanvasElement | null;
+  getFurnitureVisualRect(id: string): { x: number; y: number; w: number; h: number } | null;
+  getWallItemVisualRect(id: string): { x: number; y: number; w: number; h: number } | null;
   getMapBounds(): { w: number; h: number; custom: boolean };
   getViewportWorldRect(): { x: number; y: number; w: number; h: number; zoom: number };
   panToWorld(wx: number, wy: number): void;
+  panBy(dx: number, dy: number): void;
+  fitMap(): void;
+  setCursor(cursor: string | null): void;
+  setBackground(color: string | null): void;
   screenToTile(clientX: number, clientY: number): { tx: number; ty: number; wx: number; wy: number };
   worldToScreen(wx: number, wy: number): { x: number; y: number; zoom: number };
   setPointerIntercept(
-    fn: ((ev: PointerEvent, kind: 'down' | 'move' | 'up', tile: { tx: number; ty: number; wx: number; wy: number }) => boolean) | null,
+    fn: ((ev: PointerEvent, kind: 'down' | 'move' | 'up' | 'cancel', tile: { tx: number; ty: number; wx: number; wy: number }) => boolean) | null,
   ): void;
   isWalkable(tx: number, ty: number): number;
+  onBeforeFrame(cb: (ctx: CanvasRenderingContext2D, view: { zoom: number; ox: number; oy: number; dpr: number }) => void): () => void;
   onAfterFrame(cb: (ctx: CanvasRenderingContext2D, view: { zoom: number; ox: number; oy: number; dpr: number }) => void): () => void;
 }
 

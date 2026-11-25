@@ -121,6 +121,7 @@ export class Renderer {
   /** Último fator noturno aplicado (usado pelo overlay). */
   night = 0;
   private clearColor = '#7fae62';
+  private editorBackground: string | null = null;
   private grass: CanvasPattern | null = null;
   private theme: SeasonalTheme = 'none';
   private arenaFxTracker: ArenaFxTracker = { lastFxId: 0, lastWinnerMatchId: 0 };
@@ -143,8 +144,45 @@ export class Renderer {
     this.assetsVersion++;
   }
 
+  setEditorBackground(color: string | null): void {
+    this.editorBackground = color;
+    if (color) this.clearColor = color;
+    else this.sync(this.theme);
+  }
+
   getOverviewCanvas(): HTMLCanvasElement | null {
     return this.sim.building.custom ? this.customChunks.getOverviewCanvas() : this.base;
+  }
+
+  getFurnitureVisualRect(id: string): { x: number; y: number; w: number; h: number } | null {
+    for (const area of this.areas.values()) {
+      const furniture = area.furniture.find((item) => item.id === id);
+      if (!furniture) continue;
+      const sprites = furnitureSprites(this.art, furniture, 0);
+      if (!sprites) return null;
+      const base = seasonalFurniture(this.theme, furniture.kind, area.layout, furniture.seed) ?? sprites.base;
+      const parts = [base, sprites.front].filter((part): part is Sprite => !!part);
+      if (!parts.length) return null;
+      const x0 = Math.min(...parts.map((part) => furniture.ax - part.ax));
+      const y0 = Math.min(...parts.map((part) => furniture.ay - part.ay));
+      const x1 = Math.max(...parts.map((part) => furniture.ax - part.ax + part.canvas.width));
+      const y1 = Math.max(...parts.map((part) => furniture.ay - part.ay + part.canvas.height));
+      return { x: x0 / TILE, y: y0 / TILE, w: (x1 - x0) / TILE, h: (y1 - y0) / TILE };
+    }
+    return null;
+  }
+
+  getWallItemVisualRect(id: string): { x: number; y: number; w: number; h: number } | null {
+    for (const area of this.areas.values()) {
+      const placement = area.layout.wallItems.find((item) => item.id === id);
+      if (!placement) continue;
+      const vis = toWallVis(placement, area.id);
+      const sprite = wallSprites(this.art, vis.kind, vis.variant, 0, vis.seed);
+      if (!sprite) return null;
+      const origin = wallItemOrigin(vis, sprite.base);
+      return { x: origin.x / TILE, y: origin.y / TILE, w: sprite.base.canvas.width / TILE, h: sprite.base.canvas.height / TILE };
+    }
+    return null;
   }
 
   invalidateCustomRect(tileRect?: { x: number; y: number; w: number; h: number }): void {
@@ -166,7 +204,7 @@ export class Renderer {
       this.shells = [];
       this.shellWindows = [];
       this.cars = [];
-      this.clearColor = '#5a8347';
+      this.clearColor = this.editorBackground ?? '#5a8347';
       const mw = sim.building.mapWidth ?? sim.building.rect?.w ?? sim.building.cols * COL_W;
       const mh = sim.building.mapHeight ?? sim.building.rect?.h ?? BUILDING_H;
       this.exterior = { bounds: { x: 0, y: 0, w: mw, h: mh }, floors: [], props: [], streetY: mh * TILE, streetH: 0, lanes: [] };
@@ -303,10 +341,10 @@ export class Renderer {
       this.grass = this.ctx.createPattern(tile, 'repeat');
       // cor de fundo (antes do padrão carregar): a média já com o tom da vinheta
       const k = VIGNETTE_ALPHA;
-      this.clearColor = `rgb(${Math.round((r / n) * (1 - k) + 18 * k)},${Math.round((g / n) * (1 - k) + 40 * k)},${Math.round((bl / n) * (1 - k) + 26 * k)})`;
+      this.clearColor = this.editorBackground ?? `rgb(${Math.round((r / n) * (1 - k) + 18 * k)},${Math.round((g / n) * (1 - k) + 40 * k)},${Math.round((bl / n) * (1 - k) + 26 * k)})`;
     } catch {
       this.grass = null;
-      this.clearColor = '#6f9a5a';
+      this.clearColor = this.editorBackground ?? '#6f9a5a';
     }
     this.finishBase(ctx, cols);
     this.base = c;
@@ -380,7 +418,7 @@ export class Renderer {
 
   // =================================================================== frame
 
-  frame(now: number, dt: number, opts: WorldOptions, sel: { agent: string | null; room: string | null; hover: string | null }): void {
+  frame(now: number, dt: number, opts: WorldOptions, sel: { agent: string | null; room: string | null; hover: string | null }, beforeFrame?: (ctx: CanvasRenderingContext2D, view: { zoom: number; ox: number; oy: number; dpr: number }) => void): void {
     const { ctx, camera } = this;
     const isCustom = !!this.sim.building.custom;
     this.date.setTime(this.clock());
@@ -460,6 +498,7 @@ export class Renderer {
         drawArenaFloor(ctx, ar, this.sim.arena.state, now);
       }
     }
+    beforeFrame?.(ctx, { zoom: camera.zoom, ox, oy, dpr: camera.dpr });
     if (isCustom) {
       this.customChunks.drawWalls(this.art, ctx, vx0, vy0, vx1, vy1, scale);
       for (const vis of this.areas.values()) {

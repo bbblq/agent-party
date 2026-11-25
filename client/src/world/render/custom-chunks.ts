@@ -220,13 +220,20 @@ export class CustomChunkCache {
     for (const area of this.areas) {
       if (area.id === 'custom:common') continue;
       if (area.kind === 'room') {
-        ctx.fillStyle = 'rgba(255, 224, 130, 0.14)';
-        ctx.fillRect(
-          Math.floor(area.rect.x * sx),
-          Math.floor(area.rect.y * sy),
-          Math.max(1, Math.ceil(area.rect.w * sx)),
-          Math.max(1, Math.ceil(area.rect.h * sy)),
-        );
+        const rx = Math.floor(area.rect.x * sx);
+        const ry = Math.floor(area.rect.y * sy);
+        const rw = Math.max(1, Math.ceil(area.rect.w * sx));
+        const rh = Math.max(1, Math.ceil(area.rect.h * sy));
+        ctx.save();
+        ctx.globalAlpha = 0.14;
+        ctx.fillStyle = area.accentColor ?? '#ffe082';
+        ctx.fillRect(rx, ry, rw, rh);
+        ctx.restore();
+        if (area.accentColor) {
+          ctx.strokeStyle = area.accentColor;
+          ctx.lineWidth = 1;
+          ctx.strokeRect(rx + 0.5, ry + 0.5, Math.max(0, rw - 1), Math.max(0, rh - 1));
+        }
       }
       for (const f of area.furniture) {
         ctx.fillStyle = f.kind.startsWith('desk') ? '#6c513b' : '#53627a';

@@ -68,6 +68,7 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
   const socialCbs = new Set<(e: SocialEvent) => void>();
   const soundCbs = new Set<(c: SoundCue) => void>();
   const roomMenuCbs = new Set<(roomId: string, at: { x: number; y: number }) => void>();
+  const beforeFrameCbs = new Set<(ctx: CanvasRenderingContext2D, view: { zoom: number; ox: number; oy: number; dpr: number }) => void>();
   const afterFrameCbs = new Set<(ctx: CanvasRenderingContext2D, view: { zoom: number; ox: number; oy: number; dpr: number }) => void>();
   let cues = new SoundCues(sim, camera);
   let selection: Selection = null;
@@ -87,8 +88,10 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
   let lastSyncedMapRev = -1;
   let fetchingMapRev = -1;
   let pointerIntercept:
-    | ((ev: PointerEvent, kind: 'down' | 'move' | 'up', tile: { tx: number; ty: number; wx: number; wy: number }) => boolean)
+    | ((ev: PointerEvent, kind: 'down' | 'move' | 'up' | 'cancel', tile: { tx: number; ty: number; wx: number; wy: number }) => boolean)
     | null = null;
+  let editorCursor: string | null = null;
+  let editorBackground: string | null = null;
   const abort = new AbortController();
 
   // ------------------------------------------------------------------ tamanho/DPR
@@ -217,7 +220,7 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
   const setHover = (id: string | null) => {
     if (id === hover) return;
     hover = id;
-    canvas.style.cursor = id ? 'pointer' : 'grab';
+    canvas.style.cursor = editorCursor ?? (id ? 'pointer' : 'grab');
     hoverCbs.forEach((cb) => cb(id));
   };
 
@@ -349,7 +352,7 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
         lastLayoutVer = sim.layoutVersion;
         updateBounds();
         if (!framed && sim.initialized) {
-          overview(false);
+          if (!userMoved) overview(false);
           framed = true;
         } else if (!userMoved && !previewLocked) overview(true);
       }
@@ -358,7 +361,11 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
       const followCh = camera.follow ? sim.person(camera.follow) : undefined;
       if (camera.follow && !followCh) camera.follow = null;
       camera.update(real, followCh ? camera.centerFor(followCh.x, followCh.y - 12, camera.zoom) : null, realDt);
-      renderer.frame(now, dt, options, { agent: selection?.type === 'agent' ? selection.id : null, room: selection?.type === 'room' ? selection.id : null, hover });
+      renderer.frame(now, dt, options, { agent: selection?.type === 'agent' ? selection.id : null, room: selection?.type === 'room' ? selection.id : null, hover }, (ctx, view) => {
+        ctx.save();
+        for (const cb of beforeFrameCbs) cb(ctx, view);
+        ctx.restore();
+      });
       overlay.draw(now, options, { agent: selection?.type === 'agent' ? selection.id : null, room: selection?.type === 'room' ? selection.id : null, hover });
       if (afterFrameCbs.size) {
         const t = camera.transform();
@@ -423,7 +430,7 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
     return { tx: Math.floor(w.x / TILE), ty: Math.floor(w.y / TILE), wx: w.x, wy: w.y };
   };
 
-  const makePointerProxy = (kind: 'down' | 'move' | 'up') => (ev: PointerEvent) => {
+  const makePointerProxy = (kind: 'down' | 'move' | 'up' | 'cancel') => (ev: PointerEvent) => {
     if (!pointerIntercept) return;
     const hit = pointerIntercept(ev, kind, screenToTile(ev.clientX, ev.clientY));
     if (hit) {
@@ -434,9 +441,18 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
   const onInterceptDown = makePointerProxy('down');
   const onInterceptMove = makePointerProxy('move');
   const onInterceptUp = makePointerProxy('up');
+  const onInterceptCancel = makePointerProxy('cancel');
+  const onMiddleMouse = (ev: MouseEvent) => {
+    if (!pointerIntercept || ev.button !== 1) return;
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+  };
   canvas.addEventListener('pointerdown', onInterceptDown, { capture: true });
   canvas.addEventListener('pointermove', onInterceptMove, { capture: true });
   canvas.addEventListener('pointerup', onInterceptUp, { capture: true });
+  canvas.addEventListener('pointercancel', onInterceptCancel, { capture: true });
+  canvas.addEventListener('mousedown', onMiddleMouse, { capture: true });
+  canvas.addEventListener('auxclick', onMiddleMouse, { capture: true });
 
   window.addEventListener('resize', resize);
   document.addEventListener('visibilitychange', onVisibility);
@@ -465,6 +481,8 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
       renderer.invalidateCustomRect(tileRect);
     },
     getOverviewCanvas: () => renderer.getOverviewCanvas(),
+    getFurnitureVisualRect: (id) => renderer.getFurnitureVisualRect(id),
+    getWallItemVisualRect: (id) => renderer.getWallItemVisualRect(id),
     getMapBounds: () => ({
       w: sim.building.custom ? (sim.building.mapWidth ?? sim.building.rect?.w ?? sim.building.cols * COL_W) : sim.building.cols * COL_W,
       h: sim.building.custom ? (sim.building.mapHeight ?? sim.building.rect?.h ?? BUILDING_H) : BUILDING_H,
@@ -484,6 +502,33 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
       camera.y = c.y;
       camera.clamp();
     },
+    panBy: (dx, dy) => {
+      userMoved = true;
+      camera.follow = null;
+      camera.stop();
+      camera.panBy(dx, dy);
+    },
+    fitMap: () => {
+      userMoved = true;
+      framed = true;
+      camera.follow = null;
+      camera.stop();
+      const b = buildingRect();
+      const zoom = Math.min(4, Math.max(camera.minZoom, camera.fitZoom(b, 32)));
+      const c = camera.centerFor(b.x + b.w / 2, b.y + b.h / 2, zoom);
+      camera.x = c.x;
+      camera.y = c.y;
+      camera.zoom = zoom;
+      camera.clamp();
+    },
+    setCursor: (cursor) => {
+      editorCursor = cursor;
+      canvas.style.cursor = cursor ?? (hover ? 'pointer' : 'grab');
+    },
+    setBackground: (color) => {
+      editorBackground = color;
+      renderer.setEditorBackground(color);
+    },
     screenToTile,
     worldToScreen: (wx, wy) => {
       const p = camera.worldToScreen(wx, wy);
@@ -493,6 +538,10 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
       pointerIntercept = fn;
     },
     isWalkable: (tx, ty) => sim.building.grid.get(tx, ty),
+    onBeforeFrame: (cb) => {
+      beforeFrameCbs.add(cb);
+      return () => void beforeFrameCbs.delete(cb);
+    },
     onAfterFrame: (cb) => {
       afterFrameCbs.add(cb);
       return () => void afterFrameCbs.delete(cb);
@@ -515,6 +564,7 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
     sim.social.wallets.save(Date.now());
     sim = new Sim(art, () => options, playback ? null : undefined, { visit: visitMode });
     renderer = new Renderer(canvas, art, sim, camera);
+    renderer.setEditorBackground(editorBackground);
     if (assets) renderer.setAssets(assets);
     if (playback) {
       const p = playback;
@@ -618,11 +668,15 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: Cr
       canvas.removeEventListener('pointerdown', onInterceptDown, { capture: true });
       canvas.removeEventListener('pointermove', onInterceptMove, { capture: true });
       canvas.removeEventListener('pointerup', onInterceptUp, { capture: true });
+      canvas.removeEventListener('pointercancel', onInterceptCancel, { capture: true });
+      canvas.removeEventListener('mousedown', onMiddleMouse, { capture: true });
+      canvas.removeEventListener('auxclick', onMiddleMouse, { capture: true });
       document.removeEventListener('visibilitychange', onVisibility);
       selectCbs.clear();
       hoverCbs.clear();
       socialCbs.clear();
       soundCbs.clear();
+      beforeFrameCbs.clear();
       afterFrameCbs.clear();
     },
     editor: editorBridge,

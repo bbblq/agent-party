@@ -38,6 +38,10 @@ export interface PanelGeometry {
   /** Borda esquerda e borda superior da gaveta aberta. */
   drawerLeft: number;
   drawerTop: number;
+  studioLeft?: number;
+  studioToolbarRight?: number;
+  studioTop?: number;
+  studioBottom?: number;
   /** Gaveta como folha inferior (celular) em vez de coluna à direita. */
   drawerSheet: boolean;
   /** Altura do feed aberto e recolhido, e a distância dele até a borda inferior. */
@@ -50,6 +54,7 @@ export interface PanelFlags {
   sidebar: boolean;
   feed: boolean;
   drawer: boolean;
+  studio?: boolean;
   /** Tela estreita: a barra lateral vira gaveta sobreposta (com fundo escuro) e não conta como área coberta. */
   narrow: boolean;
 }
@@ -64,12 +69,17 @@ function shrinkPair(a: number, b: number, total: number): [number, number] {
 
 /** Margens cobertas pela UI (puro: testado em viewport.test.ts). */
 export function computeInsets(g: PanelGeometry, f: PanelFlags, gap = INSET_GAP): ViewInsets {
-  const top = Math.max(0, g.topBottom) + gap;
-  const left = f.sidebar && !f.narrow ? Math.max(0, g.sideRight) + gap : 0;
-  const right = f.drawer && !g.drawerSheet ? Math.max(0, g.vw - g.drawerLeft) + gap : 0;
+  const top = Math.max(Math.max(0, g.topBottom) + gap, f.studio ? (g.studioTop ?? 0) : 0);
+  const sidebarLeft = f.sidebar && !f.narrow ? Math.max(0, g.sideRight) + gap : 0;
+  const studioToolbarLeft = f.studio ? Math.max(0, g.studioToolbarRight ?? 0) + gap : 0;
+  const left = Math.max(sidebarLeft, studioToolbarLeft);
+  const drawerRight = f.drawer && !g.drawerSheet ? Math.max(0, g.vw - g.drawerLeft) + gap : 0;
+  const studioRight = f.studio ? Math.max(0, g.vw - (g.studioLeft ?? g.vw)) + gap : 0;
+  const right = Math.max(drawerRight, studioRight);
   const feedH = f.feed ? g.feedOpenH : g.feedClosedH;
   let bottom = feedH > 0 ? feedH + g.feedMargin + gap : 0;
   if (f.drawer && g.drawerSheet) bottom = Math.max(bottom, g.vh - g.drawerTop + gap);
+  if (f.studio) bottom = Math.max(bottom, g.studioBottom ?? 0);
   const [l, r] = shrinkPair(left, right, g.vw);
   const [t, b] = shrinkPair(top, bottom, g.vh);
   return { top: Math.round(t), right: Math.round(r), bottom: Math.round(b), left: Math.round(l) };
@@ -89,6 +99,10 @@ export interface FreeAreaPanels {
   sidebar: HTMLElement;
   drawer: HTMLElement;
   feed: HTMLElement;
+  studio?: HTMLElement;
+  studioToolbar?: HTMLElement;
+  studioViewportBar?: HTMLElement;
+  studioAiDock?: HTMLElement;
 }
 
 /** `follow: 'option'` segue a opção "seguir selecionado" do momento; `true` = duplo clique (sempre segue). */
@@ -145,6 +159,10 @@ export class FreeArea {
       ro.observe(this.probeGap);
       ro.observe(panels.sidebar);
       ro.observe(panels.drawer);
+      if (panels.studio) ro.observe(panels.studio);
+      if (panels.studioToolbar) ro.observe(panels.studioToolbar);
+      if (panels.studioViewportBar) ro.observe(panels.studioViewportBar);
+      if (panels.studioAiDock) ro.observe(panels.studioAiDock);
     }
     this.watchCanvas();
   }
@@ -341,7 +359,7 @@ export class FreeArea {
 
   /** Posições de layout (offset*), que ignoram o transform das animações de abrir/fechar. */
   private measure(): PanelGeometry {
-    const { topbar, sidebar, drawer } = this.panels;
+    const { topbar, sidebar, drawer, studio, studioToolbar, studioViewportBar, studioAiDock } = this.panels;
     const vw = innerWidth;
     const vh = innerHeight;
     const drawerSheet = drawer.offsetWidth >= vw - 40 && drawer.offsetTop > topbar.offsetHeight + 40;
@@ -352,6 +370,10 @@ export class FreeArea {
       sideRight: sidebar.offsetLeft + sidebar.offsetWidth,
       drawerLeft: drawer.offsetLeft,
       drawerTop: drawer.offsetTop,
+      studioLeft: studio?.offsetLeft,
+      studioToolbarRight: studioToolbar ? studioToolbar.offsetLeft + studioToolbar.offsetWidth : undefined,
+      studioTop: studioViewportBar ? studioViewportBar.offsetTop + studioViewportBar.offsetHeight : undefined,
+      studioBottom: studioAiDock ? vh - studioAiDock.offsetTop : undefined,
       drawerSheet,
       feedOpenH: this.probeFeedOpen.offsetHeight,
       feedClosedH: this.probeFeedClosed.offsetHeight,

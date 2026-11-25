@@ -236,6 +236,7 @@ export function compileCustomMap(doc: CustomMapDocument, version = 0): BuildingL
         spots: [],
         walkable: [{ ...z.rect }],
         ...(z.floorTint ? { floorTint: z.floorTint } : {}),
+        ...(z.accentColor ? { accentColor: z.accentColor } : {}),
       };
       areaMap.set(z.id, a);
     }

@@ -154,6 +154,7 @@ export interface AreaLayout {
   side?: 'north' | 'south';
   /** Tom (cor hex) aplicado de leve sobre o piso, para cada sala ter identidade própria. */
   floorTint?: string;
+  accentColor?: string;
   /** Retângulo (px) escurecido quando a luz está apagada. */
   shade?: { x: number; y: number; w: number; h: number };
   /** Retângulo (px) da placa com o nome. */

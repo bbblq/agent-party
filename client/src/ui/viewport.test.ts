@@ -34,6 +34,20 @@ describe('computeInsets', () => {
     });
   });
 
+  it('map studio conta a largura real dos painéis laterais, inclusive recolhido', () => {
+    const open = computeInsets({ ...desktop, studioLeft: 1056, studioToolbarRight: 56 }, { sidebar: false, feed: false, drawer: false, studio: true, narrow: false });
+    expect(open.right).toBe(1440 - 1056 + g);
+    expect(open.left).toBe(56 + g);
+    const collapsed = computeInsets({ ...desktop, studioLeft: 1396, studioToolbarRight: 56 }, { sidebar: false, feed: false, drawer: false, studio: true, narrow: false });
+    expect(collapsed.right).toBe(1440 - 1396 + g);
+    expect(collapsed.left).toBe(56 + g);
+  });
+
+  it('AI dock expandido reserva a altura real na parte inferior', () => {
+    const ins = computeInsets({ ...desktop, studioLeft: 1160, studioToolbarRight: 88, studioTop: 104, studioBottom: 440 }, { sidebar: false, feed: false, drawer: false, studio: true, narrow: false });
+    expect(ins.bottom).toBe(440);
+  });
+
   it('tela estreita: a barra lateral é sobreposta (com fundo escuro) e não conta', () => {
     expect(computeInsets(desktop, { sidebar: true, feed: false, drawer: false, narrow: true }).left).toBe(0);
   });

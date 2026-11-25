@@ -81,6 +81,13 @@ describe('shared/map RLE, 4-way compile, and 512x512 scale', () => {
     }
   });
 
+  it('preserves zone tint and accent color in the compiled layout', () => {
+    const doc = createBlankCustomMap('颜色测试', 32, 24, 'color-test');
+    doc.zones.push({ id: 'zone-color', name: '颜色区域', kind: 'room', rect: { x: 2, y: 2, w: 8, h: 6 }, floorTint: '#112233', accentColor: '#2680EB' });
+    const layout = compileCustomMap(doc);
+    expect([...layout.core, ...layout.rooms].find((area) => area.id === 'zone-color')).toMatchObject({ floorTint: '#112233', accentColor: '#2680EB' });
+  });
+
   it('renders ASCII inspection output for a bounded sub-region', () => {
     const doc = createBlankCustomMap('ASCII 测试', 48, 36, 'ascii-test');
     const inspected = renderAsciiRegion(doc, { x: 10, y: 8, w: 28, h: 20 });
