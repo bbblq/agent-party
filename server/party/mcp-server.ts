@@ -854,12 +854,16 @@ export async function handleMcpRpc(
 export function renderMapMcpScript(defaultBaseUrl: string): string {
   const safeBase = JSON.stringify(defaultBaseUrl);
   return `#!/usr/bin/env node
-// Agent Party 地图工坊 MCP Stdio <-> HTTP Bridge（零外部依赖，带在线心跳）
+// Agent Party 地图工坊 MCP Bridge & 零重启直连客户端（零外部依赖）
 import readline from 'node:readline';
 
 function readArg(flag) {
   const i = process.argv.indexOf(flag);
   return i >= 0 && i + 1 < process.argv.length ? process.argv[i + 1] : '';
+}
+
+function hasFlag(flag) {
+  return process.argv.includes(flag);
 }
 
 const rawUrl = (readArg('--url') || process.env.AGENT_PARTY_URL || ${safeBase}).replace(/\\/+$/, '');
@@ -881,6 +885,94 @@ async function sendHeartbeat() {
     });
   } catch {
     // ignore transient offline
+  }
+}
+
+async function rpcCall(id, method, params) {
+  const res = await fetch(mcpEndpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-MCP-Transport': 'stdio',
+      ...(token ? { Authorization: \`Bearer \${token}\` } : {}),
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(\`HTTP \${res.status}: \${text}\`);
+  return JSON.parse(text);
+}
+
+if (hasFlag('--wait')) {
+  const maxWaitSec = Math.max(10, Math.min(3600, Number(readArg('--max-wait') || 600) || 600));
+  const deadline = Date.now() + maxWaitSec * 1000;
+  let seq = 1;
+  void sendHeartbeat();
+  const hbTimer = setInterval(() => void sendHeartbeat(), 15000);
+  hbTimer.unref?.();
+
+  try {
+    await rpcCall(seq++, 'initialize', {
+      protocolVersion: '2024-11-05',
+      capabilities: {},
+      clientInfo: { name: 'AI-Agent-Listener', version: '1.1.0' },
+    });
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+
+  while (Date.now() < deadline) {
+    try {
+      const resp = await rpcCall(seq++, 'tools/call', {
+        name: 'map_wait_next_task',
+        arguments: { timeoutSec: 25 },
+      });
+      const text = resp?.result?.content?.[0]?.text;
+      if (text) {
+        const parsed = JSON.parse(text);
+        if (parsed?.hasTask) {
+          process.stdout.write(\`\${text}\\n\`);
+          clearInterval(hbTimer);
+          process.exit(0);
+        }
+      }
+    } catch {
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+  clearInterval(hbTimer);
+  process.stdout.write(JSON.stringify({ hasTask: false, status: 'wait_deadline_reached' }) + '\\n');
+  process.exit(0);
+}
+
+const callTool = readArg('--call');
+if (callTool) {
+  const rawArgs = (() => {
+    const idx = process.argv.indexOf('--call');
+    const cand = idx >= 0 && idx + 2 < process.argv.length ? process.argv[idx + 2] : '{}';
+    return cand.startsWith('--') ? '{}' : cand;
+  })();
+  let parsedArgs = {};
+  try {
+    parsedArgs = JSON.parse(rawArgs);
+  } catch (err) {
+    console.error(\`Invalid JSON arguments: \${err instanceof Error ? err.message : String(err)}\`);
+    process.exit(1);
+  }
+  try {
+    await rpcCall(1, 'initialize', {
+      protocolVersion: '2024-11-05',
+      capabilities: {},
+      clientInfo: { name: 'AI-Agent-CLI', version: '1.1.0' },
+    });
+    const resp = await rpcCall(2, 'tools/call', { name: callTool, arguments: parsedArgs });
+    const text = resp?.result?.content?.[0]?.text ?? JSON.stringify(resp);
+    process.stdout.write(\`\${text}\\n\`);
+    process.exit(resp?.result?.isError ? 1 : 0);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
   }
 }
 
@@ -916,5 +1008,84 @@ rl.on('line', async (line) => {
     process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: parsedId, error: { code: -32000, message: msg } }) + '\\n');
   }
 });
+`;
+}
+
+export function renderMapStudioSetupMarkdown(baseUrl: string, session: StudioSession): string {
+  const cleanBase = baseUrl.replace(/\/+$/, '');
+  const mcpUrl = `${cleanBase}/api/mcp/${session.studioToken}`;
+  const scriptUrl = `${cleanBase}/client-scripts/map-mcp.mjs`;
+  return `# Agent Party 地图工坊 — AI MCP 专属自动接入与协同协议
+
+> 这是一份给 **AI 编程助手 / Agent**（Claude Code、Codex、Antigravity、Cursor、Windsurf、Trae、OpenCode 等）直接读取并执行的配置与实时协同协议。
+> 该会话与你的 **个人专属隔离令牌** 绑定，**严格隔离，绝不会串给其他用户的 AI**。
+
+## 1. 专属连接参数
+
+- **服务端地址**：\`${cleanBase}\`
+- **专属 MCP 接口 URL（Streamable HTTP）**：\`${mcpUrl}\`
+- **专属隔离会话 ID**：\`${session.sessionId}\`
+- **专属隔离令牌**：\`${session.studioToken}\`
+- **本地桥接与直连脚本**：\`${scriptUrl}\`
+
+---
+
+## 2. 【立刻执行】下载脚本并写入 MCP 配置
+
+1. 先获取用户真实主目录 \`ABS_HOME\`（Windows 下路径使用正斜杠 \`/\`，如 \`C:/Users/Alice\`；**严禁在 JSON 中写 \`~\`**）。
+2. 创建目录并下载 \`map-mcp.mjs\`（零外部依赖）：
+\`\`\`bash
+curl -sL "${scriptUrl}" -o "<ABS_HOME>/.agent-party/map-mcp.mjs"
+\`\`\`
+3. 按你当前运行的工具，将下方 **\`agent-party-map\`** 服务合并写入 MCP 配置文件（保留用户原有配置）：
+   - **Claude Code**：\`<ABS_HOME>/.claude.json\` 或项目 \`.mcp.json\`
+   - **Cursor**：\`<ABS_HOME>/.cursor/mcp.json\`
+   - **Antigravity / Gemini**：\`<ABS_HOME>/.gemini/antigravity/mcp_config.json\`
+   - **Windsurf**：\`<ABS_HOME>/.codeium/windsurf/mcp_config.json\`
+   - **Codex CLI**：\`<ABS_HOME>/.codex/config.toml\`（\`[mcp_servers.agent-party-map]\`）
+
+**JSON 配置内容：**
+\`\`\`json
+{
+  "mcpServers": {
+    "agent-party-map": {
+      "url": "${mcpUrl}",
+      "command": "node",
+      "args": ["<ABS_HOME>/.agent-party/map-mcp.mjs", "--url", "${mcpUrl}"]
+    }
+  }
+}
+\`\`\`
+*(注意：若客户端只支持 \`url\` 或只支持 \`command\`+\`args\`，保留对应字段即可；\`${mcpUrl}\` 已内置专属令牌，无需额外 Header)*
+
+---
+
+## 3. 【零重启立即接单】让页面立刻显示「MCP 已连接 · 自动待命」
+
+- **情况 A（你的 MCP 工具列表里已经有 \`agent-party-map\` 的工具）**：
+  立即直接调用 \`map_wait_next_task\` 工具开始实时接单。
+- **情况 B（刚写完配置、原生 MCP 需要下次重开会话才加载）**：
+  **不要让用户重启软件！** 立刻通过终端运行脚本直连监听模式（零 Token 消耗挂起等待用户在网页点击「发送给 AI 修改」）：
+  \`\`\`bash
+  node "<ABS_HOME>/.agent-party/map-mcp.mjs" --wait --url "${mcpUrl}"
+  \`\`\`
+  运行后网页端状态栏会**立刻变绿显示「🟢 MCP 已连接 · AI 自动接单待命中」**，用户随时在地图上连续框选多个区块并点击发送，该命令会毫秒级唤醒并返回 JSON 任务！
+
+---
+
+## 4. 收到任务后的修改与提交规范
+
+无论通过原生 MCP 工具，还是通过 CLI \`node "<ABS_HOME>/.agent-party/map-mcp.mjs" --call <工具名> '<JSON参数>' --url "${mcpUrl}"\` 调用，流程均一致：
+
+1. **看懂任务 JSON**：包含 \`taskId\`、\`instruction\`、以及 \`boxes\` 数组（每个框包含 \`x, y, w, h, note, ascii, zones\`）。
+2. **常用高频工具**：
+   - \`map_build_room\`：\`{"x":10,"y":10,"w":14,"h":12,"name":"AI 研发区","zoneKind":"room"}\`（zoneKind 可选 \`room|lounge|cafe|restroom|reception|arena\`）
+   - \`map_place_workstations\`：\`{"x":12,"y":13,"count":6,"facing":"right","layout":"island","cols":3}\`（\`facing\` 支持四向 \`up|down|left|right\`；\`layout\` 支持 \`row|island\` 面对面工位岛）
+   - \`map_populate_zone\`：\`{"x":30,"y":10,"w":14,"h":10,"preset":"lounge","name":"休闲吧"}\`（preset: \`office|lounge|cafe|restroom|reception|arena\`）
+   - \`map_paint_tiles\` / \`map_clear_region\` / \`map_mutate_items\` / \`map_inspect_region\` / \`map_resize\`（最大 \`512×512\`）/ \`map_validate\`
+3. **提交审核**：全部区块改完后（每次工具调用都会实时渲染到用户的地图画布上），务必调用：
+   - \`map_complete_task\`：\`{"taskId":"<taskId>","summary":"已完成：..."}\`
+   网页会立刻提示用户 **「✅ 确认修改」** 或 **「↩️ 恢复原样」**。
+4. **继续待命**：提交完成后立刻重新运行 \`map_wait_next_task\`（或 \`--wait\`），无缝接收队列中的下一项或用户的下一次框选。
 `;
 }

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBlankCustomMap } from '../../shared/map';
 import { MapManager } from './map-manager';
-import { handleMcpRpc, resolveMcpAuth } from './mcp-server';
+import { handleMcpRpc, renderMapStudioSetupMarkdown, resolveMcpAuth } from './mcp-server';
 import { PetRegistry } from './pets';
 import { PartyStore } from './store';
 import { WorldSync } from './world-sync';
@@ -275,5 +275,12 @@ describe('MapManager + MCP Studio workflow & Admin live map switching', () => {
     expect(rot.ok).toBe(true);
     expect(resolveMcpAuth(noHdrReq, new URL(`http://localhost/api/mcp/${oldTokA}`), adminKey, mapManager)).toBeNull();
     expect(resolveMcpAuth(noHdrReq, new URL(`http://localhost/api/mcp/${sB.studioToken}`), adminKey, mapManager)?.session?.sessionId).toBe(sB.sessionId);
+
+    // Onboarding setup markdown embeds exact host/IP, dedicated /api/mcp/ws_... endpoint, and zero-restart --wait command
+    const setupMd = renderMapStudioSetupMarkdown('http://192.168.1.88:4747', sB);
+    expect(setupMd).toContain(`http://192.168.1.88:4747/api/mcp/${sB.studioToken}`);
+    expect(setupMd).toContain('map-mcp.mjs');
+    expect(setupMd).toContain('--wait');
+    expect(setupMd).toContain('map_complete_task');
   });
 });

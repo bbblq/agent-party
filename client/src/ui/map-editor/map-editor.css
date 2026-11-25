@@ -390,3 +390,19 @@
   display: none !important;
 }
 
+.map-studio__code {
+  margin: 0;
+  padding: 7px 8px;
+  border-radius: 6px;
+  background: #060a13;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  color: #bae6fd;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  line-height: 1.45;
+  overflow-x: auto;
+  white-space: pre;
+  user-select: text;
+}
+
+

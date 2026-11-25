@@ -115,7 +115,10 @@ export class MapEditor {
   private draftBoxSeq = 0;
   private tasks: StudioTaskSummary[] = [];
   private presence: StudioMcpPresence = { connected: false, listening: false, lastSeenAt: 0, activeTaskId: null };
-  private pairingOpen = false;
+  private pairingOpen = true;
+  private userToggledPairing = false;
+  private endpointOrigin = typeof location !== 'undefined' ? location.origin : 'http://127.0.0.1:4747';
+  private endpointCandidates: string[] = [];
 
   private dragStart: { tx: number; ty: number } | null = null;
   private hoverTile: { tx: number; ty: number } | null = null;
@@ -134,6 +137,9 @@ export class MapEditor {
   private presenceTextEl: HTMLElement;
   private presenceSubEl: HTMLElement;
   private pairingDrawerEl: HTMLElement;
+  private endpointChipsEl: HTMLElement;
+  private endpointUrlEl: HTMLElement;
+  private mcpJsonPreEl: HTMLElement;
   private tokenBadgeEl: HTMLElement;
   private autopilotBtn: HTMLButtonElement;
   private tasksListEl: HTMLElement;
@@ -153,13 +159,17 @@ export class MapEditor {
     this.presenceTextEl = h('span', { text: 'MCP 未连接' });
     this.presenceSubEl = h('div', { class: 'map-studio__badge', text: '专属会话隔离，不会串给其他人 AI' });
     this.tokenBadgeEl = h('div', { class: 'map-studio__badge', text: '等待生成专属令牌…' });
+    this.endpointChipsEl = h('div', { class: 'map-studio__chips' });
+    this.endpointUrlEl = h('div', { class: 'map-studio__badge', text: '专属 MCP 接口：生成中…', style: 'word-break:break-all;user-select:text;' });
+    this.mcpJsonPreEl = h('pre', { class: 'map-studio__code' });
 
     const pairingToggleBtn = h('button', {
       class: 'map-studio__btn',
       type: 'button',
-      text: '🔌 配对/令牌',
+      text: '🔌 接口配置',
       on: {
         click: () => {
+          this.userToggledPairing = true;
           this.pairingOpen = !this.pairingOpen;
           this.pairingDrawerEl.hidden = !this.pairingOpen;
         },
@@ -173,33 +183,45 @@ export class MapEditor {
       pairingToggleBtn,
     );
 
-    const copyMcpBtn = h('button', {
-      class: 'map-studio__btn map-studio__btn--primary',
+    const copyUrlBtn = h('button', {
+      class: 'map-studio__btn',
       type: 'button',
-      text: '📋 复制专属 MCP 配置',
+      text: '复制接口 URL',
+      on: { click: () => void this.copyEndpointUrl() },
+    });
+
+    const copyMcpBtn = h('button', {
+      class: 'map-studio__btn',
+      type: 'button',
+      text: '📋 复制 MCP JSON',
       on: { click: () => void this.copyMcpConfig() },
     });
 
     const rotateTokenBtn = h('button', {
       class: 'map-studio__btn',
       type: 'button',
-      text: '🔄 重置隔离令牌',
+      text: '🔄 重置令牌',
       on: { click: () => void this.rotateToken() },
     });
 
     this.autopilotBtn = h('button', {
-      class: 'map-studio__btn map-studio__btn--ok',
+      class: 'map-studio__btn map-studio__btn--primary',
       type: 'button',
-      text: '⚡ 复制首次开启接单口令',
+      text: '🤖 复制发给 AI 的完整接入指令（含 IP / 接口 / 自动配 MCP）',
       on: { click: () => void this.copyAutopilotPrompt() },
     }) as HTMLButtonElement;
 
     this.pairingDrawerEl = h(
       'div',
-      { class: 'map-studio__section', hidden: true, style: 'background: rgba(11, 17, 30, 0.9);' },
+      { class: 'map-studio__section', hidden: false, style: 'background: rgba(11, 17, 30, 0.92);' },
       this.tokenBadgeEl,
-      h('div', { class: 'map-studio__row' }, copyMcpBtn, rotateTokenBtn),
+      h('div', { class: 'map-studio__section-title', text: '服务端访问地址（跨机/Docker 请选局域网 IP）' }),
+      this.endpointChipsEl,
+      this.endpointUrlEl,
+      h('div', { class: 'map-studio__section-title', text: 'MCP 客户端 JSON 配置（支持 HTTP URL 或 Node 脚本）' }),
+      this.mcpJsonPreEl,
       this.autopilotBtn,
+      h('div', { class: 'map-studio__row' }, copyMcpBtn, copyUrlBtn, rotateTokenBtn),
     );
 
     this.draftBoxesEl = h('div', { class: 'map-studio__boxes' });
@@ -565,6 +587,7 @@ export class MapEditor {
         selection: MapSelection | null;
         tasks?: StudioTaskSummary[];
         presence?: StudioMcpPresence;
+        endpoints?: { baseUrl?: string; lanUrl?: string | null };
       };
       this.sessionId = data.sessionId;
       this.studioToken = data.studioToken;
@@ -572,12 +595,13 @@ export class MapEditor {
       this.selection = data.selection;
       this.tasks = data.tasks ?? [];
       if (data.presence) this.presence = data.presence;
+      this.setEndpoints(data.endpoints);
       this.saveSessionCredentials();
       this.applyDocState(data.doc);
       this.renderPresence();
       this.renderTasks();
       this.connectSse();
-      this.setStatus('工坊就绪：框选多个区域后可直接按键发送给已连接的 AI');
+      this.setStatus('工坊就绪：请先复制上方接入指令发给 AI，连上即可网页一键派单');
     } catch {
       const fallback = this.world.editor?.getCustomMap() ?? createStarterOfficeMap();
       this.applyDocState(fallback);
@@ -687,6 +711,71 @@ export class MapEditor {
     this.statusEl.textContent = msg;
   }
 
+  private setEndpoints(ep?: { baseUrl?: string; lanUrl?: string | null }): void {
+    const raw = [
+      typeof location !== 'undefined' ? location.origin : '',
+      ep?.baseUrl ?? '',
+      ep?.lanUrl ?? '',
+    ].filter((u): u is string => !!u && /^https?:\/\//.test(u));
+    const uniq: string[] = [];
+    for (const u of raw) {
+      const clean = u.replace(/\/+$/, '');
+      if (!uniq.includes(clean)) uniq.push(clean);
+    }
+    this.endpointCandidates = uniq.length ? uniq : [this.endpointOrigin];
+    if (!this.endpointCandidates.includes(this.endpointOrigin)) {
+      this.endpointOrigin = this.endpointCandidates[0];
+    }
+  }
+
+  private dedicatedMcpUrl(): string {
+    const origin = this.endpointOrigin.replace(/\/+$/, '');
+    return this.studioToken ? `${origin}/api/mcp/${this.studioToken}` : `${origin}/api/mcp`;
+  }
+
+  private buildMcpConfigObject() {
+    const url = this.dedicatedMcpUrl();
+    return {
+      mcpServers: {
+        'agent-party-map': {
+          url,
+          command: 'node',
+          args: ['<主目录>/.agent-party/map-mcp.mjs', '--url', url],
+        },
+      },
+    };
+  }
+
+  private renderPairingInfo(): void {
+    const shortSid = this.sessionId ? this.sessionId.slice(-6) : '------';
+    const shortTok = this.studioToken ? `${this.studioToken.slice(0, 8)}…${this.studioToken.slice(-4)}` : '未生成';
+    this.tokenBadgeEl.textContent = `隔离会话 #${shortSid} | 专属令牌 ${shortTok}（独立 URL 严格隔离，不会串给他人）`;
+
+    this.endpointChipsEl.innerHTML = '';
+    const list = this.endpointCandidates.length ? this.endpointCandidates : [this.endpointOrigin];
+    for (const origin of list) {
+      const isLan = !/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(origin);
+      const label = isLan ? `🌐 局域网 ${origin.replace(/^https?:\/\//, '')}` : `💻 本机 ${origin.replace(/^https?:\/\//, '')}`;
+      this.endpointChipsEl.append(
+        h('button', {
+          class: `map-studio__chip${origin === this.endpointOrigin ? ' is-active' : ''}`,
+          type: 'button',
+          text: label,
+          on: {
+            click: () => {
+              this.endpointOrigin = origin;
+              this.renderPairingInfo();
+            },
+          },
+        }),
+      );
+    }
+
+    const mcpUrl = this.dedicatedMcpUrl();
+    this.endpointUrlEl.textContent = `专属 MCP 接口：${mcpUrl}`;
+    this.mcpJsonPreEl.textContent = JSON.stringify(this.buildMcpConfigObject(), null, 2);
+  }
+
   private renderPresence(): void {
     const p = this.presence;
     const runningTask = this.tasks.find((t) => t.status === 'running');
@@ -694,25 +783,24 @@ export class MapEditor {
     this.presenceCardEl.classList.toggle('is-listening', p.listening);
 
     const shortSid = this.sessionId ? this.sessionId.slice(-6) : '------';
-    const shortTok = this.studioToken ? `${this.studioToken.slice(0, 8)}…${this.studioToken.slice(-4)}` : '未生成';
-    this.tokenBadgeEl.textContent = `隔离会话 #${shortSid} | 专属令牌 ${shortTok}（独立URL隔离，不会串给他人 AI）`;
+    if (!this.userToggledPairing) {
+      this.pairingOpen = !p.listening;
+      this.pairingDrawerEl.hidden = !this.pairingOpen;
+    }
+    this.renderPairingInfo();
 
     if (runningTask) {
       this.presenceTextEl.textContent = `AI 正在执行 #T${runningTask.seq}…`;
       this.presenceSubEl.textContent = `正在修改并实时渲染到地图上 (${p.clientName || 'MCP'}) · 可继续框选后续任务加入队列`;
-      this.autopilotBtn.hidden = true;
     } else if (p.listening) {
       this.presenceTextEl.textContent = 'MCP 已连接 · AI 自动接单待命中';
-      this.presenceSubEl.textContent = `已连接到 ${p.clientName || 'MCP 客户端'}（隔离会话 #${shortSid}），页面点击发送即刻开工`;
-      this.autopilotBtn.hidden = true;
+      this.presenceSubEl.textContent = `已连接到 ${p.clientName || 'MCP 客户端'}（隔离会话 #${shortSid}），框选后点发送即刻开工`;
     } else if (p.connected) {
       this.presenceTextEl.textContent = `MCP 已连接 (${p.clientName || 'AI 客户端'})`;
-      this.presenceSubEl.textContent = '首次连接请让 AI 调用一次 map_wait_next_task 开启自动接单监听，之后即可直接点击按键派单！';
-      this.autopilotBtn.hidden = false;
+      this.presenceSubEl.textContent = '已连上后台！请复制下方接入指令发给 AI 让它开启自动接单待命';
     } else {
       this.presenceTextEl.textContent = 'MCP 未连接';
-      this.presenceSubEl.textContent = `点击右上角「🔌 配对/令牌」复制专属连接配置，绑定你自己的 AI（会话 #${shortSid} 严格隔离）`;
-      this.autopilotBtn.hidden = false;
+      this.presenceSubEl.textContent = `请复制下方「完整接入指令」直接发给你的 AI（或手动填入下方 IP 与 MCP 接口地址）`;
     }
     this.renderSendButton();
   }
@@ -1521,28 +1609,36 @@ export class MapEditor {
     this.setStatus('已导出 JSON（可发给系统管理员在后台实时切换）');
   }
 
+  private async copyEndpointUrl(): Promise<void> {
+    const url = this.dedicatedMcpUrl();
+    await navigator.clipboard?.writeText(url).catch(() => {});
+    this.setStatus(`已复制专属 MCP 接口地址：${url}`);
+  }
+
   private async copyAutopilotPrompt(): Promise<void> {
-    const text = `你已接入我的专属 Agent Party 地图工坊（Session: ${this.sessionId}）。请立即调用 map_wait_next_task 开启自动接单监听；每次收到用户框选的区块任务并按要求修改地图后，调用 map_complete_task 提交给用户预览确认，然后继续调用 map_wait_next_task 待命。`;
+    const origin = this.endpointOrigin.replace(/\/+$/, '');
+    const mcpUrl = this.dedicatedMcpUrl();
+    const setupMdUrl = `${origin}/map-studio-setup.md?token=${encodeURIComponent(this.studioToken)}&base=${encodeURIComponent(origin)}`;
+    const text = [
+      `请帮我接入 Agent Party 地图工坊（这是我的个人专属隔离会话，勿与其他人混用）并立即开启实时协同改图：`,
+      ``,
+      `1. 专属连接信息：`,
+      `   - 服务端地址：${origin}`,
+      `   - 专属 MCP 接口 (HTTP)：${mcpUrl}`,
+      `   - 桥接脚本下载：${origin}/client-scripts/map-mcp.mjs`,
+      `   - 隔离会话 ID：${this.sessionId}（Token：${this.studioToken}）`,
+      ``,
+      `2. 请先读取并执行完整接入协议：${setupMdUrl}`,
+      `   - 若支持直接配置 MCP，请下载 map-mcp.mjs 到主目录 .agent-party/map-mcp.mjs，并将 agent-party-map (${mcpUrl}) 写入你的 MCP 配置；`,
+      `   - 为了免重启立刻在当前页面生效，请立即调用 map_wait_next_task（或执行 node "<ABS_HOME>/.agent-party/map-mcp.mjs" --wait --url "${mcpUrl}"）进入自动接单待命状态，直到页面状态变为「🟢 MCP 已连接 · AI 自动接单待命中」。`,
+    ].join('\n');
     await navigator.clipboard?.writeText(text).catch(() => {});
-    this.setStatus('已复制首次开启接单口令（只需发送一次，之后网页直接派单）');
+    this.setStatus('✅ 已复制发给 AI 的完整接入指令（含 IP、专属 MCP 接口与免重启自动接单流程）');
   }
 
   private async copyMcpConfig(): Promise<void> {
-    const origin = location.origin;
-    const dedicatedUrl = `${origin}/api/mcp/${this.studioToken}`;
-    const cfg = {
-      mcpServers: {
-        'agent-party-map': {
-          url: dedicatedUrl,
-          stdioFallback: {
-            command: 'node',
-            args: ['scripts/map-mcp.mjs', '--url', dedicatedUrl],
-          },
-        },
-      },
-    };
-    await navigator.clipboard?.writeText(JSON.stringify(cfg, null, 2)).catch(() => {});
-    this.setStatus('已复制专属隔离 MCP 配置（含独立 URL，不会串给他人 AI）');
+    await navigator.clipboard?.writeText(JSON.stringify(this.buildMcpConfigObject(), null, 2)).catch(() => {});
+    this.setStatus('已复制标准 MCP JSON 配置（含专属隔离 URL，注意将 <主目录> 替换为真实绝对路径）');
   }
 
   private async publishAsAdmin(): Promise<void> {

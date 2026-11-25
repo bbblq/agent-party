@@ -4,6 +4,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
+import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { appearanceFromSeed } from '../client/src/art/character/appearance';
 import { renderCharacter } from '../client/src/art/character/render';
@@ -14,7 +15,7 @@ import { renderReportScript, renderWatchScript } from './party/client-scripts';
 import { renderCustomizeHtml } from './party/customize-page';
 import { OfficeFeedTracker } from './party/feed';
 import { MapManager } from './party/map-manager';
-import { handleMcpRpc, renderMapMcpScript, resolveMcpAuth } from './party/mcp-server';
+import { handleMcpRpc, renderMapMcpScript, renderMapStudioSetupMarkdown, resolveMcpAuth } from './party/mcp-server';
 import { parseBoundary, parseMultipart } from './party/multipart';
 import { MAX_PET_SPRITE_BYTES, PetRegistry } from './party/pets';
 import { PokemonService, searchPokemon } from './party/pokemon';
@@ -194,6 +195,23 @@ function getBaseUrl(req: http.IncomingMessage): string {
   const proto = protoHeader || 'http';
   const reqHost = (typeof req.headers['x-forwarded-host'] === 'string' ? req.headers['x-forwarded-host'].split(',')[0].trim() : '') || req.headers.host || `127.0.0.1:${port}`;
   return `${proto}://${reqHost}`;
+}
+
+function detectLanUrl(listenPort: number): string | null {
+  try {
+    const nets = networkInterfaces();
+    for (const ifaces of Object.values(nets)) {
+      if (!ifaces) continue;
+      for (const net of ifaces) {
+        if (net.family === 'IPv4' && !net.internal && net.address) {
+          return `http://${net.address}:${listenPort}`;
+        }
+      }
+    }
+  } catch {
+    // ignore interface lookup error
+  }
+  return null;
 }
 
 function parseUrl(req: http.IncomingMessage): URL {
@@ -614,6 +632,17 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     sendText(res, 200, renderSetupMarkdown(getBaseUrl(req)), 'text/markdown; charset=utf-8');
     return true;
   }
+  if (method === 'GET' && p === '/map-studio-setup.md') {
+    const token = (url.searchParams.get('token') ?? '').trim();
+    const session = token.startsWith('ws_') ? mapManager.getSessionByToken(token) : null;
+    if (!session) {
+      sendJson(res, 401, { error: 'Invalid or missing studio token (?token=ws_...)' });
+      return true;
+    }
+    const base = (url.searchParams.get('base') || getBaseUrl(req)).replace(/\/+$/, '');
+    sendText(res, 200, renderMapStudioSetupMarkdown(base, session), 'text/markdown; charset=utf-8');
+    return true;
+  }
   if (method === 'GET' && p === '/client-scripts/report.mjs') {
     sendText(res, 200, renderReportScript(getBaseUrl(req)), 'text/javascript; charset=utf-8');
     return true;
@@ -644,6 +673,10 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       selection: session.selection,
       tasks: mapManager.getTaskSummaries(session.sessionId),
       presence: mapManager.getMcpPresence(session.sessionId),
+      endpoints: {
+        baseUrl: getBaseUrl(req),
+        lanUrl: detectLanUrl(port),
+      },
       summary: validateMapPlayability(session.doc),
     });
     return true;
@@ -702,6 +735,10 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
         selection: session.selection,
         tasks: mapManager.getTaskSummaries(session.sessionId),
         presence: mapManager.getMcpPresence(session.sessionId),
+        endpoints: {
+          baseUrl: getBaseUrl(req),
+          lanUrl: detectLanUrl(port),
+        },
         summary: validateMapPlayability(session.doc),
       });
       return true;
