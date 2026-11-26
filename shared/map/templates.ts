@@ -98,6 +98,37 @@ export function createBlankCustomMap(
   };
 }
 
+/** Pure empty grass-only canvas (ideal for scratch room tabs & cross-map assembly). */
+export function createBlankGrassMap(
+  width = 32,
+  height = 24,
+  name = '空白草地草稿',
+  id = `map-${Date.now().toString(36)}`,
+): CustomMapDocument {
+  const w = clampMapDim(width, 32);
+  const h = clampMapDim(height, 24);
+  const buf = new FloorGridBuffer(w, h, [{ kind: 'grass' }]);
+  return {
+    format: MAP_FORMAT,
+    schemaVersion: 1,
+    id,
+    name,
+    width: w,
+    height: h,
+    updatedAt: Date.now(),
+    backgroundFloor: 'grass',
+    floorPalette: buf.palette,
+    floorRows: buf.toRows(),
+    rugs: [],
+    walls: [],
+    wallItems: [],
+    furniture: [],
+    zones: [],
+    props: [],
+    spawns: [],
+  };
+}
+
 /** Converts the default built-in Agent Party office (with rooms & core areas) into a CustomMapDocument. */
 export function createStarterOfficeMap(
   roomCount = 2,

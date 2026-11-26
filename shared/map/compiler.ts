@@ -15,7 +15,36 @@ import type {
 } from '../../client/src/world/layout/types';
 import { BLOCKED, FREE, SEAT, WalkGrid } from '../../client/src/world/path/grid';
 import { FloorGridBuffer, isWalkableFloorKind } from './codec';
-import type { CustomFurnitureItem, CustomMapDocument, CustomWallBlock, CustomWallItem, CustomZone } from './types';
+import type { CustomFurnitureItem, CustomLayerGroup, CustomMapDocument, CustomWallBlock, CustomZone, SpriteRot } from './types';
+
+function combineVisualTransform(
+  groupMap: ReadonlyMap<string, CustomLayerGroup>,
+  item: { groupId?: string; rot?: SpriteRot; flipX?: boolean; flipY?: boolean; hidden?: boolean },
+): { visible: boolean; rot?: SpriteRot; flipX?: boolean; flipY?: boolean } {
+  let visible = item.hidden !== true;
+  let rot: number = item.rot ?? 0;
+  let flipX = item.flipX === true;
+  let flipY = item.flipY === true;
+  let gid = item.groupId;
+  const seen = new Set<string>();
+  while (gid && !seen.has(gid)) {
+    seen.add(gid);
+    const g = groupMap.get(gid);
+    if (!g) break;
+    if (g.visible === false) visible = false;
+    if (g.rot) rot = (rot + g.rot) % 360;
+    if (g.flipX) flipX = !flipX;
+    if (g.flipY) flipY = !flipY;
+    gid = g.parentId;
+  }
+  const normRot = (((rot % 360) + 360) % 360) as SpriteRot;
+  return {
+    visible,
+    ...(normRot !== 0 ? { rot: normRot } : {}),
+    ...(flipX ? { flipX: true } : {}),
+    ...(flipY ? { flipY: true } : {}),
+  };
+}
 
 function mergeFloorPatches(buf: FloorGridBuffer): FloorPatch[] {
   const patches: FloorPatch[] = [];
@@ -193,6 +222,13 @@ function makeStandSpot(
 export function compileCustomMap(doc: CustomMapDocument, version = 0): BuildingLayout {
   const buf = FloorGridBuffer.fromDocument(doc);
   const grid = new WalkGrid(doc.width, doc.height, version);
+  const groupMap = new Map((doc.groups ?? []).map((g) => [g.id, g]));
+  const visibleWalls = doc.walls.filter((w) => combineVisualTransform(groupMap, w).visible);
+  const visibleFurniture = doc.furniture.filter((f) => combineVisualTransform(groupMap, f).visible);
+  const visibleWallItems = doc.wallItems.filter((w) => combineVisualTransform(groupMap, w).visible);
+  const visibleRugs = doc.rugs.filter((r) => combineVisualTransform(groupMap, r).visible);
+  const visibleZones = doc.zones.filter((z) => combineVisualTransform(groupMap, z).visible);
+  const visibleSpawns = doc.spawns.filter((s) => combineVisualTransform(groupMap, s).visible);
 
   for (let y = 0; y < doc.height; y++) {
     for (let x = 0; x < doc.width; x++) {
@@ -201,11 +237,11 @@ export function compileCustomMap(doc: CustomMapDocument, version = 0): BuildingL
     }
   }
 
-  for (const w of doc.walls) {
+  for (const w of visibleWalls) {
     applyWallToGrid(grid, buf, w);
   }
 
-  for (const f of doc.furniture) {
+  for (const f of visibleFurniture) {
     const def = FURNITURE[f.kind];
     if (!def || def.mount !== 'floor') continue;
     const { w, h } = def.footprint;
@@ -243,7 +279,7 @@ export function compileCustomMap(doc: CustomMapDocument, version = 0): BuildingL
     return a;
   };
 
-  for (const z of doc.zones) {
+  for (const z of visibleZones) {
     ensureZoneArea(z);
   }
 
@@ -253,7 +289,7 @@ export function compileCustomMap(doc: CustomMapDocument, version = 0): BuildingL
     kind: 'corridor',
     rect: { x: 0, y: 0, w: doc.width, h: doc.height },
     floors: mergeFloorPatches(buf),
-    rugs: doc.rugs.map((r, i) => ({
+    rugs: visibleRugs.map((r, i) => ({
       x: Math.round(r.x * TILE),
       y: Math.round(r.y * TILE),
       w: Math.round(r.w * TILE),
@@ -261,7 +297,7 @@ export function compileCustomMap(doc: CustomMapDocument, version = 0): BuildingL
       color: r.color,
       seed: r.seed ?? 700 + i,
     })),
-    walls: doc.walls.map(toWallSegment),
+    walls: visibleWalls.map(toWallSegment),
     wallItems: [],
     furniture: [],
     spots: [],
@@ -270,14 +306,15 @@ export function compileCustomMap(doc: CustomMapDocument, version = 0): BuildingL
 
   const targetAreaFor = (tx: number, ty: number, preferredZoneId?: string): AreaLayout => {
     if (preferredZoneId && areaMap.has(preferredZoneId)) return areaMap.get(preferredZoneId)!;
-    const z = zoneContaining(doc.zones, tx, ty);
+    const z = zoneContaining(visibleZones, tx, ty);
     return z ? areaMap.get(z.id)! : commonArea;
   };
 
   // Wall items
   let elevSeq = 0;
-  for (const wi of doc.wallItems) {
+  for (const wi of visibleWallItems) {
     const area = targetAreaFor(wi.tx, wi.ty - (wi.on === 'face' ? 1 : 0), wi.zoneId);
+    const xf = combineVisualTransform(groupMap, wi);
     const placed: WallItemPlacement = {
       id: wi.id,
       kind: wi.kind,
@@ -286,6 +323,9 @@ export function compileCustomMap(doc: CustomMapDocument, version = 0): BuildingL
       baseY: Math.round(wi.ty * TILE),
       on: wi.on,
       order: 0.5,
+      ...(xf.rot ? { rot: xf.rot } : {}),
+      ...(xf.flipX ? { flipX: true } : {}),
+      ...(xf.flipY ? { flipY: true } : {}),
     };
     area.wallItems.push(placed);
     if (wi.kind === 'sign' && !area.signId) {
@@ -326,8 +366,9 @@ export function compileCustomMap(doc: CustomMapDocument, version = 0): BuildingL
   };
 
   // Floor furniture + auto spots
-  for (const f of doc.furniture) {
+  for (const f of visibleFurniture) {
     const area = targetAreaFor(f.tx, f.ty);
+    const xf = combineVisualTransform(groupMap, f);
     const placement: FurniturePlacement = {
       id: f.id,
       kind: f.kind,
@@ -338,6 +379,9 @@ export function compileCustomMap(doc: CustomMapDocument, version = 0): BuildingL
       ...(f.dy !== undefined ? { dy: f.dy } : {}),
       order: 0.5,
       ...(f.seat ? { seat: f.seat } : {}),
+      ...(xf.rot ? { rot: xf.rot } : {}),
+      ...(xf.flipX ? { flipX: true } : {}),
+      ...(xf.flipY ? { flipY: true } : {}),
     };
     area.furniture.push(placement);
 
@@ -551,7 +595,7 @@ export function compileCustomMap(doc: CustomMapDocument, version = 0): BuildingL
   }
 
   // Explicit spawn points
-  for (const sp of doc.spawns) {
+  for (const sp of visibleSpawns) {
     const area = targetAreaFor(sp.tx, sp.ty);
     area.spots.push(makeStandSpot(sp.id, 'spawn', area.id, sp.tx, sp.ty, sp.dir ?? 'down'));
   }
@@ -569,7 +613,7 @@ export function compileCustomMap(doc: CustomMapDocument, version = 0): BuildingL
 
   // Arena zone auto-spots if not explicitly provided
   let arenaArea: AreaLayout | null = null;
-  for (const z of doc.zones) {
+  for (const z of visibleZones) {
     if (z.kind !== 'arena') continue;
     const area = areaMap.get(z.id)!;
     if (!arenaArea) arenaArea = area;
@@ -601,7 +645,7 @@ export function compileCustomMap(doc: CustomMapDocument, version = 0): BuildingL
   }
 
   // Ensure every project room zone has shade rect & deterministic fallback if no switch
-  for (const z of doc.zones) {
+  for (const z of visibleZones) {
     const area = areaMap.get(z.id)!;
     if (z.kind === 'room') {
       area.shade = {

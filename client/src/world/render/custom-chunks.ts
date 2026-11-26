@@ -374,16 +374,29 @@ export class CustomChunkCache {
         const sp = wallSprites(art, vis.kind, vis.variant, 0, vis.seed);
         if (!sp) continue;
         const o = wallItemOrigin(vis, sp.base);
+        const hasXf = Boolean(it.rot || it.flipX || it.flipY);
+        const drawCanvas = (img: CanvasImageSource, dx: number, dy: number, dw: number, dh: number) => {
+          if (!hasXf) {
+            wctx.drawImage(img, dx, dy);
+            return;
+          }
+          wctx.save();
+          wctx.translate(dx + dw / 2, dy + dh / 2);
+          if (it.rot) wctx.rotate((it.rot * Math.PI) / 180);
+          if (it.flipX || it.flipY) wctx.scale(it.flipX ? -1 : 1, it.flipY ? -1 : 1);
+          wctx.drawImage(img, -dw / 2, -dh / 2);
+          wctx.restore();
+        };
         if (vis.kind === 'painting' || vis.kind === 'poster') {
           const tiles = Math.max(1, Math.round(sp.base.canvas.width / TILE));
           const ai = pickWallArt(this.assets, vis.kind, tiles, vis.variant, vis.seed);
           if (ai?.framed || (vis.kind === 'poster' && ai)) {
             const img = ai.framed ?? ai;
-            wctx.drawImage(img.img, Math.round(vis.cx - img.w / 2), vis.baseY - 28);
+            drawCanvas(img.img, Math.round(vis.cx - img.w / 2), vis.baseY - 28, img.w, img.h);
             continue;
           }
         }
-        wctx.drawImage(sp.base.canvas, o.x, o.y);
+        drawCanvas(sp.base.canvas, o.x, o.y, sp.base.canvas.width, sp.base.canvas.height);
       }
     }
 

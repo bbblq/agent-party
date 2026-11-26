@@ -1,16 +1,25 @@
 import { describe, expect, it } from 'vitest';
+import { FURNITURE, type FloorKind, type FurnitureKind } from '../../client/src/art/api';
 import {
+  FLOOR_CATALOG,
+  FULL_ASSET_CATALOG,
+  FURNITURE_CATALOG,
   FloorGridBuffer,
   MAX_MAP_SIZE,
   compileCustomMap,
+  copyRectToClipboard,
+  copySelectionToClipboard,
   createBlankCustomMap,
+  createBlankGrassMap,
   createStarterOfficeMap,
   decodeFloorRows,
   encodeFloorRows,
   parseCustomMapJson,
+  pasteClipboardIntoDoc,
   renderAsciiRegion,
   resizeCustomMap,
   serializeCustomMapJson,
+  transformSelectionInDoc,
   validateMapPlayability,
 } from './index';
 
@@ -95,5 +104,82 @@ describe('shared/map RLE, 4-way compile, and 512x512 scale', () => {
     expect(inspected.ascii).toContain('D');
     expect(inspected.furniture.length).toBeGreaterThan(0);
     expect(inspected.walls.length).toBeGreaterThan(0);
+  });
+
+  it('persists layer groups, rot/flipX/flipY transforms, and compiles group transforms cleanly', () => {
+    const doc = createBlankGrassMap(36, 28, '分组与旋转测试');
+    doc.groups = [{ id: 'grp-1', name: '打印机组合', rot: 90, flipX: true }];
+    doc.furniture.push(
+      { id: 'prn-1', kind: 'printer', tx: 10, ty: 10, groupId: 'grp-1' },
+      { id: 'desk-1', kind: 'desk', tx: 14, ty: 10 },
+    );
+
+    const parsed = parseCustomMapJson(serializeCustomMapJson(doc));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.doc.groups).toHaveLength(1);
+    expect(parsed.doc.furniture[0].groupId).toBe('grp-1');
+
+    // Compile inherits group transform (rot 90 + flipX) onto furniture placement
+    const compiled = compileCustomMap(parsed.doc);
+    const prnPlacement = compiled.core.flatMap((a) => a.furniture).find((f) => f.id === 'prn-1');
+    expect(prnPlacement?.rot).toBe(90);
+    expect(prnPlacement?.flipX).toBe(true);
+
+    // Non-directional items attach sprite rot; 4-way desks map natively on transform
+    const rotated = transformSelectionInDoc(
+      parsed.doc,
+      [
+        { layer: 'furniture', id: 'prn-1' },
+        { layer: 'furniture', id: 'desk-1' },
+      ],
+      'rot90',
+    );
+    const rotatedPrinter = rotated.furniture.find((f) => f.id === 'prn-1');
+    const rotatedDesk = rotated.furniture.find((f) => f.id === 'desk-1');
+    expect(rotatedPrinter?.rot).toBe(90);
+    expect(rotatedDesk?.kind).toBe('desk_east');
+  });
+
+  it('copies a room region (floors + walls + furniture) and pastes across maps cleanly', () => {
+    const roomDoc = createBlankCustomMap('小房间源图', 32, 24, 'src-room');
+    const clip = copyRectToClipboard(roomDoc, { x: 8, y: 6, w: 18, h: 14 }, true);
+    expect(clip).not.toBeNull();
+    expect(clip!.hasFloor).toBe(true);
+    expect(clip!.furniture.length).toBeGreaterThan(0);
+
+    const target = createBlankGrassMap(64, 48, '主园区目标图');
+    const pasted = pasteClipboardIntoDoc(target, clip!, 20, 12, { pasteFloor: true, wrapInGroupName: '粘贴小房间' });
+    expect(pasted.insertedRefs.length).toBeGreaterThan(0);
+    expect(pasted.insertedGroupIds).toHaveLength(1);
+
+    // Selection-based copy preserves groups as well
+    const selClip = copySelectionToClipboard(pasted.doc, [], pasted.insertedGroupIds);
+    expect(selClip).not.toBeNull();
+    expect(selClip!.groups).toHaveLength(1);
+  });
+
+  it('covers 100% of FURNITURE and FloorKind entries in FULL_ASSET_CATALOG', () => {
+    const allFurnitureKinds = Object.keys(FURNITURE) as FurnitureKind[];
+    const catalogFurnitureIds = new Set(FURNITURE_CATALOG.map((e) => e.id));
+    for (const k of allFurnitureKinds) {
+      expect(catalogFurnitureIds.has(k)).toBe(true);
+    }
+    const expectedFloors: FloorKind[] = [
+      'carpet',
+      'wood',
+      'tile_check',
+      'tile_white',
+      'concrete',
+      'marble',
+      'grass',
+      'sidewalk',
+      'street',
+    ];
+    const catalogFloorIds = new Set(FLOOR_CATALOG.map((e) => e.id));
+    for (const fl of expectedFloors) {
+      expect(catalogFloorIds.has(fl)).toBe(true);
+    }
+    expect(FULL_ASSET_CATALOG.length).toBeGreaterThanOrEqual(allFurnitureKinds.length + expectedFloors.length);
   });
 });

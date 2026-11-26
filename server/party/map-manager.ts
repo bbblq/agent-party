@@ -62,6 +62,8 @@ export interface StudioSessionEvent {
   doc?: CustomMapDocument;
   patchRect?: TileRect;
   selection: MapSelection | null;
+  draftBoxes?: StudioTaskBox[];
+  draftInstruction?: string;
   summary: MapValidationReport;
   tasks?: StudioTaskSummary[];
   presence?: StudioMcpPresence;
@@ -74,6 +76,8 @@ export interface StudioSession {
   doc: CustomMapDocument;
   rev: number;
   selection: MapSelection | null;
+  draftBoxes: StudioTaskBox[];
+  draftInstruction?: string;
   taskSeq: number;
   tasks: InternalStudioTask[];
   mcpClientName?: string;
@@ -704,6 +708,8 @@ export class MapManager {
             rev?: number;
             taskSeq?: number;
             selection?: MapSelection | null;
+            draftBoxes?: StudioTaskBox[];
+            draftInstruction?: string;
             tasks?: InternalStudioTask[];
             updatedAt?: number;
           };
@@ -725,6 +731,10 @@ export class MapManager {
             doc: parsed.doc,
             rev: typeof raw.rev === 'number' && raw.rev >= 1 ? raw.rev : 1,
             selection: raw.selection ?? null,
+            draftBoxes: Array.isArray(raw.draftBoxes) ? raw.draftBoxes : [],
+            ...(typeof raw.draftInstruction === 'string' && raw.draftInstruction.trim()
+              ? { draftInstruction: raw.draftInstruction.trim().slice(0, 800) }
+              : {}),
             taskSeq: typeof raw.taskSeq === 'number' ? raw.taskSeq : tasks.length,
             tasks,
             mcpLastSeenAt: 0,
@@ -885,6 +895,8 @@ export class MapManager {
         rev: s.rev,
         taskSeq: s.taskSeq,
         selection: s.selection,
+        draftBoxes: s.draftBoxes,
+        ...(s.draftInstruction ? { draftInstruction: s.draftInstruction } : {}),
         tasks: s.tasks.slice(-30),
         updatedAt: s.updatedAt,
       };
@@ -998,6 +1010,7 @@ export class MapManager {
       doc: baseDoc,
       rev: 1,
       selection: null,
+      draftBoxes: [],
       taskSeq: 0,
       tasks: [],
       mcpLastSeenAt: 0,
@@ -1542,9 +1555,36 @@ export class MapManager {
   setSessionSelection(
     sessionId: string,
     selection: MapSelection | null,
-  ): { ok: true; rev: number; selection: MapSelection | null } | { ok: false; error: string } {
+    draftBoxes?: Array<{ id?: string; label?: string; x: number; y: number; w: number; h: number; note?: string }>,
+    draftInstruction?: string,
+  ): { ok: true; rev: number; selection: MapSelection | null; draftBoxes: StudioTaskBox[]; draftInstruction?: string } | { ok: false; error: string } {
     const s = this.sessions.get(sessionId);
     if (!s) return { ok: false, error: 'Studio 会话不存在或已过期。' };
+
+    if (Array.isArray(draftBoxes)) {
+      s.draftBoxes = draftBoxes.slice(0, 24).map((b, idx) => {
+        const x = Math.max(0, Math.min(s.doc.width - 1, Math.floor(Number(b.x ?? 0))));
+        const y = Math.max(0, Math.min(s.doc.height - 1, Math.floor(Number(b.y ?? 0))));
+        const w = Math.max(1, Math.min(s.doc.width - x, Math.ceil(Number(b.w ?? 1))));
+        const h = Math.max(1, Math.min(s.doc.height - y, Math.ceil(Number(b.h ?? 1))));
+        return {
+          id: b.id?.trim() || `draft-${idx + 1}`,
+          label: b.label?.trim() || `区块 #${idx + 1}`,
+          x,
+          y,
+          w,
+          h,
+          ...(b.note?.trim() ? { note: String(b.note).trim().slice(0, 500) } : {}),
+        };
+      });
+    }
+
+    if (typeof draftInstruction === 'string') {
+      const clean = draftInstruction.trim().slice(0, 800);
+      if (clean) s.draftInstruction = clean;
+      else delete s.draftInstruction;
+    }
+
     if (selection) {
       const x = Math.max(0, Math.min(s.doc.width - 1, Math.floor(selection.x)));
       const y = Math.max(0, Math.min(s.doc.height - 1, Math.floor(selection.y)));
@@ -1558,9 +1598,20 @@ export class MapManager {
         ...(selection.note ? { note: String(selection.note).slice(0, 500) } : {}),
         updatedAt: Date.now(),
       };
+    } else if (s.draftBoxes.length > 0 && Array.isArray(draftBoxes)) {
+      const b0 = s.draftBoxes[0];
+      s.selection = {
+        x: b0.x,
+        y: b0.y,
+        w: b0.w,
+        h: b0.h,
+        ...(b0.note ? { note: b0.note } : {}),
+        updatedAt: Date.now(),
+      };
     } else {
       s.selection = null;
     }
+
     s.updatedAt = Date.now();
     this.saveSession(s);
     this.emitSession(s, {
@@ -1568,9 +1619,17 @@ export class MapManager {
       sessionId: s.sessionId,
       rev: s.rev,
       selection: s.selection,
+      draftBoxes: s.draftBoxes,
+      ...(s.draftInstruction ? { draftInstruction: s.draftInstruction } : {}),
       summary: validateMapPlayability(s.doc),
     });
-    return { ok: true, rev: s.rev, selection: s.selection };
+    return {
+      ok: true,
+      rev: s.rev,
+      selection: s.selection,
+      draftBoxes: s.draftBoxes,
+      ...(s.draftInstruction ? { draftInstruction: s.draftInstruction } : {}),
+    };
   }
 
   undoSession(sessionId: string): { ok: true; rev: number; doc: CustomMapDocument; summary: MapValidationReport } | { ok: false; error: string } {

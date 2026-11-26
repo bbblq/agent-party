@@ -678,6 +678,8 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       rev: session.rev,
       doc: session.doc,
       selection: session.selection,
+      draftBoxes: session.draftBoxes,
+      ...(session.draftInstruction ? { draftInstruction: session.draftInstruction } : {}),
       tasks: mapManager.getTaskSummaries(session.sessionId),
       presence: mapManager.getMcpPresence(session.sessionId),
       endpoints: {
@@ -740,6 +742,8 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
         rev: session.rev,
         doc: session.doc,
         selection: session.selection,
+        draftBoxes: session.draftBoxes,
+        ...(session.draftInstruction ? { draftInstruction: session.draftInstruction } : {}),
         tasks: mapManager.getTaskSummaries(session.sessionId),
         presence: mapManager.getMcpPresence(session.sessionId),
         endpoints: {
@@ -761,12 +765,21 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       return true;
     }
 
-    if (method === 'POST' && sub === 'selection') {
-      const body = await readJson<{ x?: number; y?: number; w?: number; h?: number; note?: string; clear?: boolean } | null>(req, 256 * 1024);
+    if ((method === 'POST' || method === 'PUT') && sub === 'selection') {
+      const body = await readJson<{
+        x?: number;
+        y?: number;
+        w?: number;
+        h?: number;
+        note?: string;
+        clear?: boolean;
+        draftBoxes?: Array<{ id?: string; label?: string; x: number; y: number; w: number; h: number; note?: string }>;
+        instruction?: string;
+      } | null>(req, 512 * 1024);
       const sel = !body || body.clear || body.x === undefined || body.y === undefined || body.w === undefined || body.h === undefined
         ? null
         : { x: Number(body.x), y: Number(body.y), w: Number(body.w), h: Number(body.h), ...(body.note ? { note: String(body.note) } : {}), updatedAt: Date.now() };
-      const resSel = mapManager.setSessionSelection(sid, sel);
+      const resSel = mapManager.setSessionSelection(sid, sel, body?.draftBoxes, body?.instruction);
       sendJson(res, resSel.ok ? 200 : 400, resSel);
       return true;
     }

@@ -8,6 +8,20 @@ export const DEFAULT_MAP_W = 96;
 export const DEFAULT_MAP_H = 64;
 export const MAX_MAP_ITEMS = 8000;
 
+export type SpriteRot = 0 | 90 | 180 | 270;
+
+export interface CustomLayerGroup {
+  id: string;
+  name: string;
+  parentId?: string;
+  collapsed?: boolean;
+  visible?: boolean;
+  locked?: boolean;
+  rot?: SpriteRot;
+  flipX?: boolean;
+  flipY?: boolean;
+}
+
 export interface FloorPaletteEntry {
   kind: FloorKind;
   tint?: string;
@@ -31,6 +45,9 @@ export interface CustomWallBlock {
   h: number;
   style: WallStyle;
   doorways?: CustomWallDoorway[];
+  groupId?: string;
+  hidden?: boolean;
+  locked?: boolean;
 }
 
 export interface CustomZone {
@@ -42,6 +59,9 @@ export interface CustomZone {
   floorTint?: string;
   hasLightSwitch?: boolean;
   tags?: string[];
+  groupId?: string;
+  hidden?: boolean;
+  locked?: boolean;
 }
 
 export interface CustomFurnitureItem {
@@ -58,6 +78,12 @@ export interface CustomFurnitureItem {
   /** Future extensibility hooks for per-member seat binding. */
   reservedFor?: string;
   tags?: string[];
+  groupId?: string;
+  rot?: SpriteRot;
+  flipX?: boolean;
+  flipY?: boolean;
+  hidden?: boolean;
+  locked?: boolean;
 }
 
 export interface CustomWallItem {
@@ -70,6 +96,12 @@ export interface CustomWallItem {
   on: 'face' | 'south';
   variant?: string;
   zoneId?: string;
+  groupId?: string;
+  rot?: SpriteRot;
+  flipX?: boolean;
+  flipY?: boolean;
+  hidden?: boolean;
+  locked?: boolean;
 }
 
 export interface CustomRug {
@@ -80,6 +112,9 @@ export interface CustomRug {
   h: number;
   color: string;
   seed?: number;
+  groupId?: string;
+  hidden?: boolean;
+  locked?: boolean;
 }
 
 export interface CustomSpawnPoint {
@@ -87,6 +122,9 @@ export interface CustomSpawnPoint {
   tx: number;
   ty: number;
   dir?: Dir;
+  groupId?: string;
+  hidden?: boolean;
+  locked?: boolean;
 }
 
 export interface CustomSpotOverride {
@@ -126,6 +164,7 @@ export interface CustomMapDocument {
   props: ExteriorProp[];
   spawns: CustomSpawnPoint[];
   spots?: CustomSpotOverride[];
+  groups?: CustomLayerGroup[];
 }
 
 export interface MapSelection {

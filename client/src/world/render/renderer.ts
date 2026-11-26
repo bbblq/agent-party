@@ -727,75 +727,97 @@ export class Renderer {
 
   private drawWallItem(vis: AreaVis, w: WallVis, now: number, hour: number, rise: number): void {
     const { ctx } = this;
-    switch (w.kind) {
-      case 'window':
-        this.drawWindow(w, hour, now, 1, rise);
-        return;
-      case 'elevator': {
-        const idx = this.elevatorVis.indexOf(w);
-        const state = this.sim.elevators[idx]?.state ?? 0;
-        const s = wallSprites(this.art, 'elevator', w.variant, state, w.seed);
-        if (!s) return;
-        const o = wallItemOrigin(w, s.base);
-        ctx.drawImage(s.base.canvas, o.x, o.y + rise);
-        decorateElevator(ctx, this.theme, w.cx, w.baseY + rise);
-        return;
+    const hasXf = Boolean(w.rot || w.flipX || w.flipY);
+    const drawInner = () => {
+      switch (w.kind) {
+        case 'window':
+          this.drawWindow(w, hour, now, 1, rise);
+          return;
+        case 'elevator': {
+          const idx = this.elevatorVis.indexOf(w);
+          const state = this.sim.elevators[idx]?.state ?? 0;
+          const s = wallSprites(this.art, 'elevator', w.variant, state, w.seed);
+          if (!s) return;
+          const o = wallItemOrigin(w, s.base);
+          ctx.drawImage(s.base.canvas, o.x, o.y + rise);
+          decorateElevator(ctx, this.theme, w.cx, w.baseY + rise);
+          return;
+        }
+        case 'light_switch': {
+          const on = vis.room ? vis.room.lightOn : true;
+          const s = wallSprites(this.art, 'light_switch', on ? 'on' : 'off', 0, w.seed);
+          if (!s) return;
+          const o = wallItemOrigin(w, s.base);
+          ctx.drawImage(s.base.canvas, o.x, o.y + rise);
+          return;
+        }
+        case 'clock': {
+          const s = wallSprites(this.art, 'clock', w.variant, 0, w.seed);
+          if (!s) return;
+          const o = wallItemOrigin(w, s.base);
+          ctx.drawImage(s.base.canvas, o.x, o.y + rise);
+          const r = s.base.rects?.face;
+          if (r) this.safe(() => this.art.drawClock(ctx, { x: o.x + r.x, y: o.y + rise + r.y, w: r.w, h: r.h }, this.wallClockDate));
+          return;
+        }
+        case 'whiteboard': {
+          const s = wallSprites(this.art, 'whiteboard', w.variant, 0, w.seed);
+          if (!s) return;
+          const o = wallItemOrigin(w, s.base);
+          ctx.drawImage(s.base.canvas, o.x, o.y + rise);
+          const r = s.base.rects?.board;
+          if (r) this.safe(() => this.art.drawBoard(ctx, { x: o.x + r.x, y: o.y + rise + r.y, w: r.w, h: r.h }, vis.room?.board ?? [], now));
+          return;
+        }
+        case 'tv': {
+          const s = wallSprites(this.art, 'tv', w.variant, 0, w.seed);
+          if (!s) return;
+          const o = wallItemOrigin(w, s.base);
+          ctx.drawImage(s.base.canvas, o.x, o.y + rise);
+          const r = s.base.rects?.tv;
+          // roda na TV do lounge: o programa escolhido (futebol, novela, desenho) ou o videogame
+          const live = this.sim.social.tvScreen();
+          const mode = live ? live.mode : TV_MODES[Math.floor(now / 9000) % TV_MODES.length];
+          const seed = live ? live.seed : w.seed;
+          if (r) this.safe(() => this.art.drawScreen(ctx, { x: o.x + r.x, y: o.y + rise + r.y, w: r.w, h: r.h }, mode, now, seed));
+          return;
+        }
+        case 'mirror': {
+          const s = wallSprites(this.art, 'mirror', w.variant, 0, w.seed);
+          if (!s) return;
+          const o = wallItemOrigin(w, s.base);
+          ctx.drawImage(s.base.canvas, o.x, o.y + rise);
+          const r = s.base.rects?.glass;
+          if (r) this.drawReflection(w, o.x + r.x, o.y + rise + r.y, r.w, r.h);
+          return;
+        }
+        default: {
+          const s = wallSprites(this.art, w.kind, w.variant, 0, w.seed);
+          if (!s) return;
+          const o = wallItemOrigin(w, s.base);
+          ctx.drawImage(s.base.canvas, o.x, o.y + rise);
+        }
       }
-      case 'light_switch': {
-        const on = vis.room ? vis.room.lightOn : true;
-        const s = wallSprites(this.art, 'light_switch', on ? 'on' : 'off', 0, w.seed);
-        if (!s) return;
-        const o = wallItemOrigin(w, s.base);
-        ctx.drawImage(s.base.canvas, o.x, o.y + rise);
-        return;
-      }
-      case 'clock': {
-        const s = wallSprites(this.art, 'clock', w.variant, 0, w.seed);
-        if (!s) return;
-        const o = wallItemOrigin(w, s.base);
-        ctx.drawImage(s.base.canvas, o.x, o.y + rise);
-        const r = s.base.rects?.face;
-        if (r) this.safe(() => this.art.drawClock(ctx, { x: o.x + r.x, y: o.y + rise + r.y, w: r.w, h: r.h }, this.wallClockDate));
-        return;
-      }
-      case 'whiteboard': {
-        const s = wallSprites(this.art, 'whiteboard', w.variant, 0, w.seed);
-        if (!s) return;
-        const o = wallItemOrigin(w, s.base);
-        ctx.drawImage(s.base.canvas, o.x, o.y + rise);
-        const r = s.base.rects?.board;
-        if (r) this.safe(() => this.art.drawBoard(ctx, { x: o.x + r.x, y: o.y + rise + r.y, w: r.w, h: r.h }, vis.room?.board ?? [], now));
-        return;
-      }
-      case 'tv': {
-        const s = wallSprites(this.art, 'tv', w.variant, 0, w.seed);
-        if (!s) return;
-        const o = wallItemOrigin(w, s.base);
-        ctx.drawImage(s.base.canvas, o.x, o.y + rise);
-        const r = s.base.rects?.tv;
-        // roda na TV do lounge: o programa escolhido (futebol, novela, desenho) ou o videogame
-        const live = this.sim.social.tvScreen();
-        const mode = live ? live.mode : TV_MODES[Math.floor(now / 9000) % TV_MODES.length];
-        const seed = live ? live.seed : w.seed;
-        if (r) this.safe(() => this.art.drawScreen(ctx, { x: o.x + r.x, y: o.y + rise + r.y, w: r.w, h: r.h }, mode, now, seed));
-        return;
-      }
-      case 'mirror': {
-        const s = wallSprites(this.art, 'mirror', w.variant, 0, w.seed);
-        if (!s) return;
-        const o = wallItemOrigin(w, s.base);
-        ctx.drawImage(s.base.canvas, o.x, o.y + rise);
-        const r = s.base.rects?.glass;
-        if (r) this.drawReflection(w, o.x + r.x, o.y + rise + r.y, r.w, r.h);
-        return;
-      }
-      default: {
-        const s = wallSprites(this.art, w.kind, w.variant, 0, w.seed);
-        if (!s) return;
-        const o = wallItemOrigin(w, s.base);
-        ctx.drawImage(s.base.canvas, o.x, o.y + rise);
-      }
+    };
+    if (!hasXf) {
+      drawInner();
+      return;
     }
+    const baseSp = wallSprites(this.art, w.kind, w.variant, 0, w.seed);
+    if (!baseSp) {
+      drawInner();
+      return;
+    }
+    const o = wallItemOrigin(w, baseSp.base);
+    const cx = o.x + baseSp.base.canvas.width / 2;
+    const cy = o.y + rise + baseSp.base.canvas.height / 2;
+    ctx.save();
+    ctx.translate(cx, cy);
+    if (w.rot) ctx.rotate((w.rot * Math.PI) / 180);
+    if (w.flipX || w.flipY) ctx.scale(w.flipX ? -1 : 1, w.flipY ? -1 : 1);
+    ctx.translate(-cx, -cy);
+    drawInner();
+    ctx.restore();
   }
 
   private drawWindow(w: WallVis, hour: number, now: number, alpha: number, rise = 0): void {
@@ -921,12 +943,23 @@ export class Renderer {
     if (!s) return;
     const dx = Math.round(f.ax - s.ax);
     const dy = Math.round(f.ay - s.ay);
+    const hasSpriteXf = Boolean(f.rot || f.flipX || f.flipY);
     const scaled = scale !== 1;
-    if (scaled) {
+    if (scaled || hasSpriteXf) {
       ctx.save();
-      ctx.translate(f.ax, f.ay);
-      ctx.scale(scale, scale);
-      ctx.translate(-f.ax, -f.ay);
+      if (scaled) {
+        ctx.translate(f.ax, f.ay);
+        ctx.scale(scale, scale);
+        ctx.translate(-f.ax, -f.ay);
+      }
+      if (hasSpriteXf) {
+        const cx = dx + fs.base.canvas.width / 2;
+        const cy = dy + fs.base.canvas.height / 2;
+        ctx.translate(cx, cy);
+        if (f.rot) ctx.rotate((f.rot * Math.PI) / 180);
+        if (f.flipX || f.flipY) ctx.scale(f.flipX ? -1 : 1, f.flipY ? -1 : 1);
+        ctx.translate(-cx, -cy);
+      }
     }
     ctx.drawImage(s.canvas, dx, dy);
     if (!front) {
@@ -943,7 +976,7 @@ export class Renderer {
         if (seed !== null) this.safe(() => this.art.drawScreen(ctx, { x: dx + r.x, y: dy + r.y, w: r.w, h: r.h }, 'game', now, seed));
       }
     }
-    if (scaled) ctx.restore();
+    if (scaled || hasSpriteXf) ctx.restore();
   }
 
   /** Tela do monitor: segue a atividade de quem senta ali. */

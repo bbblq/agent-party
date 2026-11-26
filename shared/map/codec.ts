@@ -8,6 +8,7 @@ import {
   MAX_MAP_SIZE,
   MIN_MAP_SIZE,
   type CustomFurnitureItem,
+  type CustomLayerGroup,
   type CustomMapDocument,
   type CustomRug,
   type CustomSpawnPoint,
@@ -16,6 +17,7 @@ import {
   type CustomWallItem,
   type CustomZone,
   type FloorPaletteEntry,
+  type SpriteRot,
 } from './types';
 
 const VALID_FLOORS = new Set<FloorKind>([
@@ -320,6 +322,38 @@ function cleanStr(v: unknown, maxLen: number): string | undefined {
   return s ? s.slice(0, maxLen) : undefined;
 }
 
+function cleanRot(v: unknown): SpriteRot | undefined {
+  if (v === 90 || v === 180 || v === 270) return v;
+  if (v === 0) return 0;
+  return undefined;
+}
+
+function cleanLayerFlags(o: Record<string, unknown>): {
+  groupId?: string;
+  hidden?: boolean;
+  locked?: boolean;
+} {
+  const groupId = cleanStr(o.groupId, 64);
+  return {
+    ...(groupId ? { groupId } : {}),
+    ...(o.hidden === true ? { hidden: true } : {}),
+    ...(o.locked === true ? { locked: true } : {}),
+  };
+}
+
+function cleanTransformFlags(o: Record<string, unknown>): {
+  rot?: SpriteRot;
+  flipX?: boolean;
+  flipY?: boolean;
+} {
+  const rot = cleanRot(o.rot);
+  return {
+    ...(rot !== undefined && rot !== 0 ? { rot } : {}),
+    ...(o.flipX === true ? { flipX: true } : {}),
+    ...(o.flipY === true ? { flipY: true } : {}),
+  };
+}
+
 function sanitizeWallStyle(raw: unknown): WallStyle {
   const o = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
   const base = typeof o.base === 'string' && /^#[0-9a-f]{3,8}$/i.test(o.base.trim()) ? o.base.trim() : '#e6e2da';
@@ -407,6 +441,7 @@ export function parseCustomMapJson(raw: unknown): { ok: true; doc: CustomMapDocu
         h,
         color: typeof o.color === 'string' && o.color.trim() ? o.color.trim().slice(0, 24) : '#5b7fa6',
         ...(typeof o.seed === 'number' && Number.isFinite(o.seed) ? { seed: Math.floor(o.seed) } : {}),
+        ...cleanLayerFlags(o),
       });
     }
   }
@@ -443,6 +478,7 @@ export function parseCustomMapJson(raw: unknown): { ok: true; doc: CustomMapDocu
         h,
         style: sanitizeWallStyle(o.style),
         ...(doorways && doorways.length ? { doorways } : {}),
+        ...cleanLayerFlags(o),
       });
     }
   }
@@ -473,6 +509,8 @@ export function parseCustomMapJson(raw: unknown): { ok: true; doc: CustomMapDocu
         ...(cleanStr(o.deskId, 64) ? { deskId: cleanStr(o.deskId, 64) } : {}),
         ...(cleanStr(o.reservedFor, 64) ? { reservedFor: cleanStr(o.reservedFor, 64) } : {}),
         ...(Array.isArray(o.tags) ? { tags: o.tags.map((t) => cleanStr(t, 24)).filter((t): t is string => !!t) } : {}),
+        ...cleanLayerFlags(o),
+        ...cleanTransformFlags(o),
       });
     }
   }
@@ -496,6 +534,8 @@ export function parseCustomMapJson(raw: unknown): { ok: true; doc: CustomMapDocu
         on: o.on === 'south' ? 'south' : 'face',
         ...(typeof o.variant === 'string' && o.variant.trim() ? { variant: o.variant.trim().slice(0, 24) } : {}),
         ...(cleanStr(o.zoneId, 64) ? { zoneId: cleanStr(o.zoneId, 64) } : {}),
+        ...cleanLayerFlags(o),
+        ...cleanTransformFlags(o),
       });
     }
   }
@@ -522,6 +562,7 @@ export function parseCustomMapJson(raw: unknown): { ok: true; doc: CustomMapDocu
         ...(typeof o.floorTint === 'string' && o.floorTint.trim() ? { floorTint: o.floorTint.trim().slice(0, 24) } : {}),
         ...(typeof o.hasLightSwitch === 'boolean' ? { hasLightSwitch: o.hasLightSwitch } : {}),
         ...(Array.isArray(o.tags) ? { tags: o.tags.map((t) => cleanStr(t, 24)).filter((t): t is string => !!t) } : {}),
+        ...cleanLayerFlags(o),
       });
     }
   }
@@ -557,6 +598,28 @@ export function parseCustomMapJson(raw: unknown): { ok: true; doc: CustomMapDocu
         tx,
         ty,
         ...(VALID_DIRS.has(o.dir as Dir) ? { dir: o.dir as Dir } : {}),
+        ...cleanLayerFlags(o),
+      });
+    }
+  }
+
+  let groups: CustomLayerGroup[] | undefined;
+  if (Array.isArray(r.groups)) {
+    groups = [];
+    for (const it of r.groups.slice(0, 512)) {
+      if (!it || typeof it !== 'object') continue;
+      const o = it as Record<string, unknown>;
+      const gid = cleanStr(o.id, 64);
+      if (!gid) continue;
+      const parentId = cleanStr(o.parentId, 64);
+      groups.push({
+        id: gid,
+        name: cleanStr(o.name, 48) || `分组 ${groups.length + 1}`,
+        ...(parentId && parentId !== gid ? { parentId } : {}),
+        ...(o.collapsed === true ? { collapsed: true } : {}),
+        ...(o.visible === false ? { visible: false } : {}),
+        ...(o.locked === true ? { locked: true } : {}),
+        ...cleanTransformFlags(o),
       });
     }
   }
@@ -611,6 +674,7 @@ export function parseCustomMapJson(raw: unknown): { ok: true; doc: CustomMapDocu
       props,
       spawns,
       ...(spots ? { spots } : {}),
+      ...(groups && groups.length ? { groups } : {}),
     },
   };
 }

@@ -54,6 +54,9 @@ export function makeCustomPlaceholderVis(_art: ArtModule, layout: AreaLayout, ro
       order: f.order,
       areaId: layout.id,
       ...(seatSpot ? { seatSpot } : {}),
+      ...(f.rot ? { rot: f.rot } : {}),
+      ...(f.flipX ? { flipX: true } : {}),
+      ...(f.flipY ? { flipY: true } : {}),
       states: [],
     };
   });

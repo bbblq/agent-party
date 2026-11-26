@@ -27,6 +27,9 @@ export interface FurniturePlacement {
   order: number;
   /** Para mesas: índice do lugar (a tela segue a atividade de quem senta ali). */
   seat?: string;
+  rot?: 0 | 90 | 180 | 270;
+  flipX?: boolean;
+  flipY?: boolean;
 }
 
 /** Item montado em parede. `cx` = centro em px de mundo; `baseY` = linha do rodapé em px. */
@@ -39,6 +42,9 @@ export interface WallItemPlacement {
   /** 'face' = face da parede norte; 'south' = sobre a mureta da parede sul. */
   on: 'face' | 'south';
   order: number;
+  rot?: 0 | 90 | 180 | 270;
+  flipX?: boolean;
+  flipY?: boolean;
 }
 
 export interface Doorway {

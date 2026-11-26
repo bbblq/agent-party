@@ -21,6 +21,16 @@ export function start(): void {
   );
 
   const params = new URLSearchParams(location.search);
+  const path = location.pathname.replace(/\/+$/, '') || '/';
+  if (path === '/map' || path === '/map/assets' || params.get('studio') === '1') {
+    void import('./ui/map-editor/studio-app').then((m) =>
+      m.startMapStudio({
+        initialView: path === '/map/assets' || params.get('view') === 'catalog' ? 'catalog' : 'canvas',
+      }),
+    );
+    return;
+  }
+
   const store = new OfficeStore({ mock: params.has('mock') });
   const worldCanvas = document.getElementById('world') as HTMLCanvasElement;
   const uiRoot = document.getElementById('ui') as HTMLElement;

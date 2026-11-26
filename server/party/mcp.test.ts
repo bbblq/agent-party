@@ -283,4 +283,30 @@ describe('MapManager + MCP Studio workflow & Admin live map switching', () => {
     expect(setupMd).toContain('--wait');
     expect(setupMd).toContain('map_complete_task');
   });
+
+  it('returns multi-box draftBoxes in map_get_selection and map_get_context for direct Startup Prompt invocation', async () => {
+    const sDirect = mapManager.createSession(createBlankCustomMap('直连框选图', 48, 36, 'direct-map'));
+    mapManager.setSessionSelection(
+      sDirect.sessionId,
+      { x: 4, y: 4, w: 12, h: 10, note: '建办公区', updatedAt: Date.now() },
+      [
+        { id: 'b1', label: '区块 #1', x: 4, y: 4, w: 12, h: 10, note: '放6个工位' },
+        { id: 'b2', label: '区块 #2', x: 20, y: 4, w: 10, h: 8, note: '改咖啡区' },
+      ],
+      '按两处框选一起改造',
+    );
+    const req = { headers: {} } as unknown as http.IncomingMessage;
+    const auth = resolveMcpAuth(req, new URL(`http://localhost/api/mcp/${sDirect.studioToken}`), adminKey, mapManager)!;
+
+    const ctxRes = await handleMcpRpc({ jsonrpc: '2.0', id: 20, method: 'tools/call', params: { name: 'map_get_context', arguments: {} } }, auth, mapManager);
+    const ctxJson = JSON.parse((ctxRes.body as { result: { content: Array<{ text: string }> } }).result.content[0].text);
+    expect(ctxJson.draftBoxes).toHaveLength(2);
+    expect(ctxJson.draftInstruction).toBe('按两处框选一起改造');
+
+    const selRes = await handleMcpRpc({ jsonrpc: '2.0', id: 21, method: 'tools/call', params: { name: 'map_get_selection', arguments: {} } }, auth, mapManager);
+    const selJson = JSON.parse((selRes.body as { result: { content: Array<{ text: string }> } }).result.content[0].text);
+    expect(selJson.draftBoxes).toHaveLength(2);
+    expect(selJson.draftBoxes[0].ascii).toBeTruthy();
+    expect(selJson.draftBoxes[1].note).toBe('改咖啡区');
+  });
 });

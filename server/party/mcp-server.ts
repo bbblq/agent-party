@@ -569,29 +569,64 @@ export async function handleMcpRpc(
           height: t.doc.height,
           zones: t.doc.zones,
           selection: t.session?.selection ?? null,
+          draftBoxes: t.session?.draftBoxes ?? [],
+          draftInstruction: t.session?.draftInstruction ?? '',
+          queuedTasks: t.session ? mapManager.getTaskSummaries(t.session.sessionId).filter((tk) => tk.status === 'queued' || tk.status === 'running') : [],
           validation: report,
         });
         break;
       }
 
       case 'map_get_selection': {
-        if (!auth.session) {
+        const sess = auth.session;
+        if (!sess) {
           toolResult = errResult('当前连接未绑定地图工坊 Studio 会话（需要使用 ws_ 开头的工坊令牌）。');
           break;
         }
-        const sel = auth.session.selection;
-        if (!sel) {
-          toolResult = okText({ selection: null, message: '用户在工坊画布中尚未框选任何区域。' });
+        const margin = Math.max(0, Math.min(8, Math.floor(Number(args.margin ?? 2))));
+        const draftBoxes = sess.draftBoxes ?? [];
+        const sel = sess.selection;
+        if (!sel && draftBoxes.length === 0) {
+          toolResult = okText({ selection: null, draftBoxes: [], message: '用户在工坊画布中尚未框选任何区域。' });
           break;
         }
-        const margin = Math.max(0, Math.min(8, Math.floor(Number(args.margin ?? 2))));
-        const rx = Math.max(0, sel.x - margin);
-        const ry = Math.max(0, sel.y - margin);
-        const rw = Math.min(auth.session.doc.width - rx, sel.w + margin * 2);
-        const rh = Math.min(auth.session.doc.height - ry, sel.h + margin * 2);
-        const inspected = renderAsciiRegion(auth.session.doc, { x: rx, y: ry, w: rw, h: rh });
+        const primaryRect = sel ?? {
+          x: draftBoxes[0].x,
+          y: draftBoxes[0].y,
+          w: draftBoxes[0].w,
+          h: draftBoxes[0].h,
+          ...(draftBoxes[0].note ? { note: draftBoxes[0].note } : {}),
+          updatedAt: Date.now(),
+        };
+        const rx = Math.max(0, primaryRect.x - margin);
+        const ry = Math.max(0, primaryRect.y - margin);
+        const rw = Math.min(sess.doc.width - rx, primaryRect.w + margin * 2);
+        const rh = Math.min(sess.doc.height - ry, primaryRect.h + margin * 2);
+        const inspected = renderAsciiRegion(sess.doc, { x: rx, y: ry, w: rw, h: rh });
+        const boxesDetail = draftBoxes.map((b, idx) => {
+          const bx = Math.max(0, b.x - margin);
+          const by = Math.max(0, b.y - margin);
+          const bw = Math.min(sess.doc.width - bx, Math.min(48, b.w + margin * 2));
+          const bh = Math.min(sess.doc.height - by, Math.min(32, b.h + margin * 2));
+          const snap = renderAsciiRegion(sess.doc, { x: bx, y: by, w: bw, h: bh });
+          return {
+            index: idx + 1,
+            id: b.id,
+            label: b.label,
+            x: b.x,
+            y: b.y,
+            w: b.w,
+            h: b.h,
+            note: b.note ?? '',
+            ascii: snap.ascii,
+            zones: snap.zones,
+            furnitureCount: snap.furniture.length,
+          };
+        });
         toolResult = okText({
-          selection: sel,
+          selection: primaryRect,
+          draftInstruction: sess.draftInstruction ?? '',
+          draftBoxes: boxesDetail,
           inspectedRect: { x: rx, y: ry, w: rw, h: rh },
           ascii: inspected.ascii,
           legend: inspected.legend,
@@ -1060,12 +1095,13 @@ curl -sL "${scriptUrl}" -o "<ABS_HOME>/.agent-party/map-mcp.mjs"
 
 ---
 
-## 3. 【零重启立即接单】让页面立刻显示「MCP 已连接 · 自动待命」
+## 3. 【开始使用】两种启动方式
 
-- **情况 A（你的 MCP 工具列表里已经有 \`agent-party-map\` 的工具）**：
-  立即直接调用 \`map_wait_next_task\` 工具开始实时接单。
-- **情况 B（刚写完配置、原生 MCP 需要下次重开会话才加载）**：
-  **不要让用户重启软件！** 立刻通过终端运行脚本直连监听模式（零 Token 消耗挂起等待用户在网页点击「发送给 AI 修改」）：
+- **方式 A · 连接后直接在对话框粘贴启动提示词（推荐，无需挂起等待）**：
+  连接好上方 \`agent-party-map\` 后，直接在你与 AI 的聊天框发送：
+  > 我已在 Agent Party 地图工坊完成框选（会话 \`${session.sessionId}\`），请调用 \`agent-party-map\` MCP 的 \`map_get_selection\` 查看我的所有框选与备注要求，然后直接调用地图工具修改画布！
+- **方式 B · 后台自动接单监听（网页一键连续派单）**：
+  在对话里让 AI 调用 \`map_wait_next_task\`，或直接运行终端脚本：
   \`\`\`bash
   node "<ABS_HOME>/.agent-party/map-mcp.mjs" --wait --url "${mcpUrl}"
   \`\`\`

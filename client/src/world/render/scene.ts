@@ -26,6 +26,9 @@ export interface FurnVis {
   areaId: string;
   /** Mesa: spot do assento cuja atividade aparece na tela. */
   seatSpot?: string;
+  rot?: 0 | 90 | 180 | 270;
+  flipX?: boolean;
+  flipY?: boolean;
   /** Sprites por estado (resolvidos sob demanda). */
   states: (FurnitureSprites | null | undefined)[];
 }
@@ -40,6 +43,9 @@ export interface WallVis {
   on: 'face' | 'south';
   order: number;
   areaId: string;
+  rot?: 0 | 90 | 180 | 270;
+  flipX?: boolean;
+  flipY?: boolean;
 }
 
 export interface AreaVis {
@@ -277,6 +283,9 @@ export function buildAreaVis(art: ArtModule, layout: AreaLayout, room: RoomState
       order: f.order,
       areaId: layout.id,
       seatSpot: layout.spots.find((s) => s.deskId === f.id)?.id,
+      ...(f.rot ? { rot: f.rot } : {}),
+      ...(f.flipX ? { flipX: true } : {}),
+      ...(f.flipY ? { flipY: true } : {}),
       states: [],
     };
   });
@@ -285,7 +294,20 @@ export function buildAreaVis(art: ArtModule, layout: AreaLayout, room: RoomState
 }
 
 export function toWallVis(it: WallItemPlacement, areaId: string): WallVis {
-  return { id: it.id, kind: it.kind, variant: it.variant, seed: hash32(it.id), cx: it.cx, baseY: it.baseY, on: it.on, order: it.order, areaId };
+  return {
+    id: it.id,
+    kind: it.kind,
+    variant: it.variant,
+    seed: hash32(it.id),
+    cx: it.cx,
+    baseY: it.baseY,
+    on: it.on,
+    order: it.order,
+    areaId,
+    ...(it.rot ? { rot: it.rot } : {}),
+    ...(it.flipX ? { flipX: true } : {}),
+    ...(it.flipY ? { flipY: true } : {}),
+  };
 }
 
 /** Desenha paredes e piso de um conjunto de segmentos/pisos num contexto já transformado (camada base). */
