@@ -58,15 +58,22 @@ const pokemon = new PokemonService(dataDir);
 const pets = new PetRegistry(dataDir, undefined, pokemon, join(rootDir, 'assets', 'default-pets'));
 const mapManager = new MapManager(dataDir);
 const store = new PartyStore({ dataDir, pets, mapManager });
+pokemon.onUpgrade(() => {
+  pets.refresh();
+  store.notifyMapChange();
+});
 const worldSync = new WorldSync(store.toSnapshot(), {
   initialLeaderboard: store.getArenaLeaderboard(),
   initialPrevChampion: store.getPrevArenaChampion(),
   initialCustomMap: mapManager.getActiveDoc(),
   onArenaResult: (wId, wName, lId, lName, now) => {
-    store.recordArenaResult(wId, wName, lId, lName, now);
+    const board = store.recordArenaResult(wId, wName, lId, lName, now);
+    worldSync.sim.arena.setLeaderboard(board, now);
+    worldSync.sim.arena.setPrevChampion(store.getPrevArenaChampion(now));
   },
   onArenaLeaderboardReset: (now) => {
     store.ensureArenaLeaderboardFresh(now);
+    worldSync.sim.arena.setPrevChampion(store.getPrevArenaChampion(now));
   },
 });
 worldSync.start(250);
@@ -897,6 +904,9 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
         liveliness?: unknown;
         bubbles?: unknown;
         showNames?: unknown;
+        lunchEnabled?: unknown;
+        lunchStart?: unknown;
+        lunchEnd?: unknown;
       }>(req);
       if ('publicUrl' in body) {
         const r = store.setPublicUrl(body.publicUrl);
@@ -910,7 +920,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       }
       const officePatch: Record<string, unknown> =
         body.officeSettings && typeof body.officeSettings === 'object' ? { ...body.officeSettings } : {};
-      for (const k of ['theme', 'daylight', 'liveliness', 'bubbles', 'showNames'] as const) {
+      for (const k of ['theme', 'daylight', 'liveliness', 'bubbles', 'showNames', 'lunchEnabled', 'lunchStart', 'lunchEnd'] as const) {
         if (k in body) officePatch[k] = body[k];
       }
       if (Object.keys(officePatch).length > 0) {

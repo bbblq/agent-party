@@ -101,6 +101,9 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
             liveliness: g.liveliness,
             bubbles: g.bubbles,
             showNames: g.showNames,
+            lunchEnabled: g.lunchEnabled,
+            lunchStart: g.lunchStart,
+            lunchEnd: g.lunchEnd,
           }
         : base,
     );

@@ -1,5 +1,13 @@
 import { beijingHourBucket } from '../../../../shared/beijing';
-import type { AgentInfo, AgentPetInfo, ArenaChampionRecord, ArenaFxKind, ArenaLeaderboardEntry, SyncedArenaEvent, SyncedArenaFx, SyncedArenaState } from '../../../../shared/types';
+import {
+  buildFighterMoveset,
+  createFighterBattleState,
+  resolveBattleTurn,
+  resolveFighterProfile,
+  resolveFighterTypes,
+  type FighterBattleState,
+} from '../../../../shared/pokemon-battle';
+import type { AgentInfo, AgentPetInfo, ArenaChampionRecord, ArenaLeaderboardEntry, PmdAnimSpec, SyncedArenaEvent, SyncedArenaFx, SyncedArenaState } from '../../../../shared/types';
 import { ARENA_ID } from '../layout/core';
 import type { SpotDef } from '../layout/types';
 import type { Character } from './character';
@@ -10,7 +18,7 @@ export const DUEL_DURATION_MS = 60_000;
 export const DUEL_COOLDOWN_MS = 180_000;
 const GATHER_TIMEOUT_MS = 18_000;
 const FINISH_HOLD_MS = 6_000;
-const FX_DURATION_MS = 950;
+const FX_DURATION_MS = 1_150;
 const FIRST_DUEL_DELAY_MIN_MS = 12_000;
 const FIRST_DUEL_DELAY_MAX_MS = 18_000;
 const COOLDOWN_MIN_MS = DUEL_COOLDOWN_MS;
@@ -119,20 +127,6 @@ export function canCharacterDuel(info: Pick<AgentInfo, 'canDuel' | 'pet'>): bool
   return isPokemonPet(info.pet);
 }
 
-interface MoveDef {
-  kind: ArenaFxKind;
-  moveName: string;
-}
-
-const MOVES: readonly MoveDef[] = [
-  { kind: 'thunder', moveName: '十万伏特！⚡' },
-  { kind: 'fire', moveName: '喷射火焰！🔥' },
-  { kind: 'water', moveName: '高压水炮！💧' },
-  { kind: 'beam', moveName: '破坏光线！✨' },
-  { kind: 'slash', moveName: '十字斩！⚔️' },
-  { kind: 'star', moveName: '高速星星！🌟' },
-];
-
 const CHEER_LINES = [
   '好帅！！👏',
   '这招太顶了！🔥',
@@ -141,6 +135,24 @@ const CHEER_LINES = [
   '绝地反击！😱',
   '神仙打架！✨',
 ];
+
+function computeHitRatio(ch: Character, category: 'physical' | 'special' | 'status'): number {
+  const pmd = ch.info.pet?.pmd;
+  let spec: PmdAnimSpec | undefined;
+  if (pmd) {
+    spec = category === 'physical' ? pmd.attack : category === 'special' ? pmd.shoot : pmd.charge;
+  }
+  if (spec && spec.hitFrame !== undefined && spec.durations.length > 0) {
+    const total = spec.durations.reduce((a, b) => a + b, 0);
+    if (total > 0) {
+      let beforeHit = 0;
+      const limit = Math.min(spec.hitFrame, spec.durations.length);
+      for (let i = 0; i < limit; i++) beforeHit += spec.durations[i];
+      return Math.max(0.22, Math.min(0.62, beforeHit / total));
+    }
+  }
+  return category === 'special' ? 0.35 : category === 'status' ? 0.45 : 0.38;
+}
 
 function sayLine(ch: Character, text: string, ms: number, now: number): void {
   ch.sayText = text;
@@ -165,7 +177,9 @@ export class ArenaController {
   onResult?: (winnerId: string, winnerName: string, loserId: string, loserName: string, now?: number) => void;
   onLeaderboardReset?: (now: number) => void;
 
-  private plannedWinner: 'left' | 'right' = 'left';
+  private leftBattle?: FighterBattleState;
+  private rightBattle?: FighterBattleState;
+  private nextAttacker: 'left' | 'right' = 'left';
   private nextDuelAt = 0;
   private nextExchangeAt = 0;
   private nextCheerAt = 0;
@@ -323,13 +337,25 @@ export class ArenaController {
       right!.dir = 'left';
 
       if (now >= this.state.endsAt) {
-        this.finishMatch(left!, right!, now);
+        const winnerSide: 'left' | 'right' =
+          this.state.leftHp !== this.state.rightHp
+            ? this.state.leftHp > this.state.rightHp
+              ? 'left'
+              : 'right'
+            : Math.random() < 0.5
+              ? 'left'
+              : 'right';
+        const winner = winnerSide === 'left' ? left! : right!;
+        const loser = winnerSide === 'left' ? right! : left!;
+        this.finishMatch(winner, loser, now);
         return;
       }
 
       if (now >= this.nextExchangeAt) {
         this.runExchange(left!, right!, now);
-        this.nextExchangeAt = now + 2_800 + Math.random() * 1_400;
+        if (this.state.phase === 'fight') {
+          this.nextExchangeAt = now + 2_400 + Math.random() * 1_100;
+        }
       }
       if (now >= this.nextCheerAt) {
         this.runWatcherCheer(now);
@@ -440,34 +466,56 @@ export class ArenaController {
 
       if (this.state.fx && this.state.fx.id !== this.lastRemoteFxId) {
         this.lastRemoteFxId = this.state.fx.id;
-        const attacker = this.sim.chars.get(this.state.fx.fromId);
-        const defender = this.sim.chars.get(this.state.fx.toId);
+        const fx = this.state.fx;
+        const attacker = this.sim.chars.get(fx.fromId);
+        const defender = this.sim.chars.get(fx.toId);
         if (attacker && !attacker.gone) {
-          attacker.pose = 'play';
-          sayLine(attacker, this.state.fx.moveName, 1900, now);
+          attacker.pose = fx.category === 'status' ? 'cheer' : 'play';
+          sayLine(attacker, fx.moveName, 1900, now);
         }
-        if (defender && !defender.gone && Math.random() < 0.7) {
-          defender.pose = 'sulk';
-          sayLine(defender, '唔！💥', 1200, now);
+        if (defender && !defender.gone && fx.category !== 'status') {
+          if (fx.dodged) {
+            defender.pose = 'run';
+            sayLine(defender, '闪开了！💨', 1300, now);
+          } else if (fx.effectiveness === 'immune') {
+            defender.pose = 'stand';
+            sayLine(defender, '对我没用！🛡️', 1300, now);
+          } else {
+            defender.pose = 'sulk';
+            const hitLine =
+              fx.effectiveness === 'double_super' || fx.effectiveness === 'super'
+                ? '好痛！！💥'
+                : fx.crit
+                  ? '好险！！💢'
+                  : '唔！💥';
+            if (Math.random() < 0.85 || fx.crit || fx.effectiveness === 'super' || fx.effectiveness === 'double_super') {
+              sayLine(defender, hitLine, 1200, now);
+            }
+          }
         }
         if (Math.random() < 0.45) {
           this.runWatcherCheer(now);
         }
       }
+      if (!this.state.leftTypes?.length && left) this.state.leftTypes = resolveFighterTypes(left.info);
+      if (!this.state.rightTypes?.length && right) this.state.rightTypes = resolveFighterTypes(right.info);
     } else if (incoming.phase === 'finish') {
       if (prevPhase !== 'finish') {
         const winner = incoming.winnerId ? this.sim.chars.get(incoming.winnerId) : undefined;
         const loserId = incoming.winnerId === incoming.leftId ? incoming.rightId : incoming.leftId;
         const loser = loserId ? this.sim.chars.get(loserId) : undefined;
+        const winnerArch = winner ? resolveFighterProfile(winner.info).archetype : 'pokemon';
+        const loserArch = loser ? resolveFighterProfile(loser.info).archetype : 'pokemon';
         if (winner && !winner.gone) {
           winner.pose = 'cheer';
           winner.setIcon('star', FINISH_HOLD_MS, now);
-          sayLine(winner, '赢了！🏆', 3200, now);
+          sayLine(winner, winnerArch === 'human' ? '这就是打工人的实力！🏆' : '赢了！🏆', 3200, now);
           this.sim.pushEffect({ kind: 'confetti', charId: winner.id, at: now });
         }
         if (loser && !loser.gone) {
           loser.pose = 'sulk';
-          sayLine(loser, '下次一定赢回来…', 3000, now);
+          loser.setIcon('sweat', FINISH_HOLD_MS, now);
+          sayLine(loser, loserArch === 'human' ? '需求太猛顶不住了…' : '下次一定赢回来…', 3000, now);
         }
         for (const id of this.localWatchers) {
           const w = this.sim.chars.get(id);
@@ -540,6 +588,8 @@ export class ArenaController {
     return {
       ...this.state,
       ...(this.state.nextDuelAt ? { nextDuelAt: this.state.nextDuelAt } : {}),
+      ...(this.state.leftTypes ? { leftTypes: [...this.state.leftTypes] } : {}),
+      ...(this.state.rightTypes ? { rightTypes: [...this.state.rightTypes] } : {}),
       watchers: [...this.state.watchers],
       ...(this.state.fx ? { fx: { ...this.state.fx } } : {}),
       leaderboard: this.state.leaderboard.slice(0, 6).map((e) => ({ ...e })),
@@ -554,6 +604,8 @@ export class ArenaController {
       startedAt: remote.startedAt ? remote.startedAt + offset : 0,
       endsAt: remote.endsAt ? remote.endsAt + offset : 0,
       ...(this.nextDuelAt ? { nextDuelAt: this.nextDuelAt } : {}),
+      ...(remote.leftTypes ? { leftTypes: [...remote.leftTypes] } : {}),
+      ...(remote.rightTypes ? { rightTypes: [...remote.rightTypes] } : {}),
       watchers: [...remote.watchers],
       ...(remote.fx
         ? {
@@ -600,6 +652,7 @@ export class ArenaController {
     const workFighters: Character[] = [];
     for (const c of this.sim.chars.values()) {
       if (c.gone || c.leaving || c.arriving) continue;
+      if (this.sim.isCharacterOnLunch(c, now)) continue;
       if (!canCharacterDuel(c.info)) continue;
       if (c.mode === 'idle' && !c.inside) {
         idleFighters.push(c);
@@ -623,20 +676,27 @@ export class ArenaController {
     this.nextDuelAt = 0;
 
     // 先将两位选手置为 gather 状态，以免清空原闲逛计划时触发其他副作用
+    this.leftBattle = createFighterBattleState(left.info);
+    this.rightBattle = createFighterBattleState(right.info);
     this.state = {
       phase: 'gather',
       matchId: this.state.matchId + 1,
       leftId: left.id,
       leftName: left.info.name,
       leftHp: 100,
+      leftTypes: [...this.leftBattle.types],
+      leftAwakened: false,
       rightId: right.id,
       rightName: right.info.name,
       rightHp: 100,
+      rightTypes: [...this.rightBattle.types],
+      rightAwakened: false,
       startedAt: now,
       endsAt: now + GATHER_TIMEOUT_MS,
       durationMs: DUEL_DURATION_MS,
       watchers: [],
       leaderboard: this.state.leaderboard,
+      prevChampion: this.state.prevChampion ?? null,
     };
 
     this.dispatchToSpot(left, spots.left, true, `${right.info.name}，来切磋一局！⚔️`, now);
@@ -704,6 +764,7 @@ export class ArenaController {
     const cands: Character[] = [];
     for (const c of this.sim.chars.values()) {
       if (c.gone || c.leaving || c.arriving || c.inside) continue;
+      if (this.sim.isCharacterOnLunch(c, now)) continue;
       if (c.mode !== 'idle') continue;
       if (this.isBusy(c.id)) continue;
       cands.push(c);
@@ -787,52 +848,101 @@ export class ArenaController {
   }
 
   private beginFight(left: Character, right: Character, now: number): void {
-    this.plannedWinner = Math.random() < 0.5 ? 'left' : 'right';
+    this.leftBattle = createFighterBattleState(left.info);
+    this.rightBattle = createFighterBattleState(right.info);
+    this.nextAttacker = Math.random() < 0.5 ? 'left' : 'right';
     this.state.phase = 'fight';
     this.state.startedAt = now;
     this.state.endsAt = now + DUEL_DURATION_MS;
     this.state.leftHp = 100;
     this.state.rightHp = 100;
+    this.state.leftTypes = [...this.leftBattle.types];
+    this.state.rightTypes = [...this.rightBattle.types];
+    this.state.leftAwakened = false;
+    this.state.rightAwakened = false;
     left.dir = 'right';
     right.dir = 'left';
     sayLine(left, '决斗开始！⚔️', 2200, now);
     sayLine(right, '放马过来吧！🔥', 2200, now);
-    this.nextExchangeAt = now + 2_200;
+    this.nextExchangeAt = now + 1_800;
     this.nextCheerAt = now + 3_500;
   }
 
   private runExchange(left: Character, right: Character, now: number): void {
+    if (!this.leftBattle) this.leftBattle = createFighterBattleState(left.info);
+    if (!this.rightBattle) this.rightBattle = createFighterBattleState(right.info);
+
     const remaining = Math.max(0, this.state.endsAt - now);
-    const atkSide: 'left' | 'right' =
-      remaining < 6_000 ? this.plannedWinner : Math.random() < 0.5 ? 'left' : 'right';
+    const atkSide = this.nextAttacker;
+    this.nextAttacker = Math.random() < 0.8 ? (atkSide === 'left' ? 'right' : 'left') : atkSide;
+
     const attacker = atkSide === 'left' ? left : right;
     const defender = atkSide === 'left' ? right : left;
-    const move = MOVES[Math.floor(Math.random() * MOVES.length)];
+    const atkBattle = atkSide === 'left' ? this.leftBattle : this.rightBattle;
+    const defBattle = atkSide === 'left' ? this.rightBattle : this.leftBattle;
+
+    const turn = resolveBattleTurn(atkBattle, defBattle, attacker.info, defender.info, Math.random, {
+      forceFinishIfLow: remaining < 8_000 && defBattle.hp <= 30,
+    });
+    const hitRatio = computeHitRatio(attacker, turn.move.category);
 
     const fx: SyncedArenaFx = {
       id: this.fxSeq++,
-      kind: move.kind,
+      kind: turn.move.fx,
       fromId: attacker.id,
       toId: defender.id,
-      moveName: move.moveName,
+      moveName: turn.move.name,
       at: now,
       until: now + FX_DURATION_MS,
+      category: turn.move.category,
+      moveType: turn.move.type,
+      damage: turn.damage,
+      prevTargetHp: turn.prevTargetHp,
+      effectiveness: turn.effectiveness,
+      crit: turn.crit,
+      dodged: turn.dodged,
+      ...(turn.buffText ? { buffText: turn.buffText } : {}),
+      ...(turn.ko ? { ko: true } : {}),
+      hitRatio,
     };
     this.state.fx = fx;
+    this.state.leftHp = this.leftBattle.hp;
+    this.state.rightHp = this.rightBattle.hp;
+    this.state.leftAwakened = this.leftBattle.awakened;
+    this.state.rightAwakened = this.rightBattle.awakened;
 
-    attacker.pose = 'play';
-    sayLine(attacker, move.moveName, 1900, now);
-    if (Math.random() < 0.65) {
-      defender.pose = 'sulk';
-      sayLine(defender, '唔！💥', 1200, now);
+    attacker.pose = turn.move.category === 'status' ? 'cheer' : 'play';
+    sayLine(attacker, turn.move.name, 1900, now);
+
+    if (turn.move.category !== 'status') {
+      if (turn.dodged) {
+        defender.pose = 'run';
+        sayLine(defender, '闪开了！💨', 1300, now);
+      } else if (turn.effectiveness === 'immune') {
+        defender.pose = 'stand';
+        sayLine(defender, '对我没用！🛡️', 1300, now);
+      } else {
+        defender.pose = 'sulk';
+        if (turn.defenderJustAwakened) {
+          const line =
+            defBattle.archetype === 'human'
+              ? 'Deadline 之力觉醒！☕'
+              : defBattle.archetype === 'custom_pet'
+                ? '还能再战！！🐾'
+                : '气势爆发！！🔥';
+          sayLine(defender, line, 1500, now);
+        } else if (turn.effectiveness === 'double_super' || turn.effectiveness === 'super') {
+          sayLine(defender, '好痛！！💥', 1200, now);
+        } else if (turn.crit) {
+          sayLine(defender, '好险！！💢', 1200, now);
+        } else if (Math.random() < 0.7) {
+          sayLine(defender, '唔！💥', 1200, now);
+        }
+      }
     }
 
-    const dmg = 7 + Math.floor(Math.random() * 10);
-    const minFloor = atkSide === this.plannedWinner ? 12 : 18;
-    if (atkSide === 'left') {
-      this.state.rightHp = Math.max(minFloor, this.state.rightHp - dmg);
-    } else {
-      this.state.leftHp = Math.max(minFloor, this.state.leftHp - dmg);
+    if (turn.ko) {
+      this.finishMatch(attacker, defender, now, fx);
     }
   }
 
@@ -848,42 +958,56 @@ export class ArenaController {
     sayLine(picked, CHEER_LINES[Math.floor(Math.random() * CHEER_LINES.length)], 2200, now);
   }
 
-  private finishMatch(left: Character, right: Character, now: number): void {
-    const winSide = this.plannedWinner;
-    const winner = winSide === 'left' ? left : right;
-    const loser = winSide === 'left' ? right : left;
-
-    if (winSide === 'left') {
-      this.state.leftHp = Math.max(12, this.state.leftHp);
+  private finishMatch(winner: Character, loser: Character, now: number, existingFx?: SyncedArenaFx): void {
+    const winIsLeft = winner.id === this.state.leftId;
+    if (winIsLeft) {
+      this.state.leftHp = Math.max(1, this.state.leftHp);
       this.state.rightHp = 0;
     } else {
-      this.state.rightHp = Math.max(12, this.state.rightHp);
+      this.state.rightHp = Math.max(1, this.state.rightHp);
       this.state.leftHp = 0;
     }
 
-    const finMove = MOVES[Math.floor(Math.random() * MOVES.length)];
-    this.state.fx = {
-      id: this.fxSeq++,
-      kind: finMove.kind,
-      fromId: winner.id,
-      toId: loser.id,
-      moveName: finMove.moveName,
-      at: now,
-      until: now + FX_DURATION_MS,
-    };
+    if (!existingFx) {
+      const loadout = buildFighterMoveset(winner.info);
+      const finMove = loadout.attacks[0];
+      const prevHp = winIsLeft ? Math.max(1, this.rightBattle?.hp ?? this.state.rightHp) : Math.max(1, this.leftBattle?.hp ?? this.state.leftHp);
+      this.state.fx = {
+        id: this.fxSeq++,
+        kind: finMove.fx,
+        fromId: winner.id,
+        toId: loser.id,
+        moveName: finMove.name,
+        at: now,
+        until: now + FX_DURATION_MS,
+        category: finMove.category,
+        moveType: finMove.type,
+        damage: prevHp,
+        prevTargetHp: prevHp,
+        effectiveness: 'normal',
+        ko: true,
+        hitRatio: computeHitRatio(winner, finMove.category),
+      };
+    } else {
+      this.state.fx = existingFx;
+    }
 
     this.state.phase = 'finish';
     this.state.endsAt = now + FINISH_HOLD_MS;
     this.state.winnerId = winner.id;
     this.state.winnerName = winner.info.name;
 
+    const winnerArch = resolveFighterProfile(winner.info).archetype;
+    const loserArch = resolveFighterProfile(loser.info).archetype;
+
     winner.pose = 'cheer';
     winner.setIcon('star', FINISH_HOLD_MS, now);
-    sayLine(winner, '赢了！🏆', 3200, now);
+    sayLine(winner, winnerArch === 'human' ? '这就是打工人的实力！🏆' : '赢了！🏆', 3200, now);
     this.sim.pushEffect({ kind: 'confetti', charId: winner.id, at: now });
 
     loser.pose = 'sulk';
-    sayLine(loser, '下次一定赢回来…', 3000, now);
+    loser.setIcon('sweat', FINISH_HOLD_MS, now);
+    sayLine(loser, loserArch === 'human' ? '需求太猛顶不住了…' : '下次一定赢回来…', 3000, now);
 
     for (const id of this.state.watchers) {
       const w = this.sim.chars.get(id);
@@ -906,6 +1030,7 @@ export class ArenaController {
         this.state.prevChampion = { ...this.state.leaderboard[0], hourBucket: prevHour };
       }
       this.state.leaderboard = [];
+      this.onLeaderboardReset?.(now);
     }
     const map = new Map(this.state.leaderboard.map((e) => [e.id, { ...e }]));
     const w = map.get(winnerId) ?? { id: winnerId, name: winnerName, wins: 0, losses: 0 };
@@ -937,14 +1062,20 @@ export class ArenaController {
     this.state.phase = 'idle';
     this.state.leftId = undefined;
     this.state.leftName = undefined;
+    this.state.leftTypes = undefined;
+    this.state.leftAwakened = undefined;
     this.state.rightId = undefined;
     this.state.rightName = undefined;
+    this.state.rightTypes = undefined;
+    this.state.rightAwakened = undefined;
     this.state.winnerId = undefined;
     this.state.winnerName = undefined;
     this.state.fx = undefined;
     this.state.watchers = [];
     this.state.leftHp = 100;
     this.state.rightHp = 100;
+    this.leftBattle = undefined;
+    this.rightBattle = undefined;
     this.nextDuelAt = now + COOLDOWN_MIN_MS + Math.random() * (COOLDOWN_MAX_MS - COOLDOWN_MIN_MS);
     this.state.nextDuelAt = this.nextDuelAt;
 

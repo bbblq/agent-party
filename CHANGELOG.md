@@ -12,8 +12,17 @@ do meio (0.**3**.0).
 
 ### Adicionado
 
+- **宝可梦决斗场战斗系统全面升级（接入上游 `SpriteCollab` 原版战斗动作 + 18 属性相克 + 彩蛋角色专属招式）。**
+  - 服务端拉取并自动迁移升级 `PMDCollab/SpriteCollab` 的 `Attack` / `Strike` / `Shoot` / `SpAttack` / `Charge` / `Shock` / `Faint` 原版战斗精灵表，并解析 `AnimData.xml` 的 `RushFrame` / `HitFrame` / `ReturnFrame` 帧标记；客户端据此实现前冲突进、击退闪白、残影闪避、倒地眩晕及无缝回退渲染。
+  - 为全国图鉴 1025 只宝可梦补齐官方 18 属性数据与属性相克矩阵，移除开局钦定胜负，改为真实 HP 归零 KO 制，并加入本系加成（STAB）、会心一击、闪避、补盲招式与残血觉醒爆发；同时保留人类小人（如「键盘跳劈」「线上热修光束」「吨吨冰美式」）及非宝可梦桌宠（如大肥鱼「咸鱼突刺」「摸鱼水炮」及自定义萌宠）的专属通用属性与招式池。
+  - 决斗场新增 17 种属性技能 Canvas 特效、VS 横幅属性徽章、命中同步血条以及「效果绝佳！」「会心一击！」「闪避！」等战斗飘字反馈。
+- **午饭时间统一午休设定（默认北京时间 `12:00–13:00`，支持 `/admin` 自定义开关与时段）。** 到达午饭时段后，所有像素小人会自动前往休息区/咖啡区或附近座位捧着便当静坐吃饭，期间不会被状态心跳打断；所有宝可梦与自带桌宠保持原有办公、摸鱼和决斗场活动。午饭结束后小人自动返回工位恢复工作。
 - **Mapas personalizados (até 512×512), Oficina de Mapas (`🗺️ 地图工坊`) e servidor MCP integrado (`/api/mcp`).** Suporte a mesas e cadeiras nas 4 direções (`desk_east`/`desk_west`, `office_chair_left`/`office_chair_right`), tapete de entrada sem elevador (`entrance_mat`), renderização por chunks e minimapa no cliente, edição visual com seleção por caixa para IA via sessão Studio (`ws_`) e troca em tempo real entre modo automático e mapas enviados no painel `/admin`.
 - **地图工坊重做专业深色五区域工作区。** 采用 28px 全局菜单、36px 上下文参数栏、44px 地图工具箱、中央工程视口和 280px 属性/图层停靠面板；新增选择移动、道路连线、POI、测距、属性编辑、图层显隐/锁定/排序及工程标签，保留 AI 框选、MCP、空格/中键平移与 WASD 操作。支持多档界面字号、互斥菜单与对象轮廓拖动。提供 `/map` 新页面入口及常驻撤销/重做；方向属性按真实素材类型映射，区域描边色同步进入渲染。选择命中与轮廓统一使用实际渲染素材边界（含墙面挂件），支持方向键逐格移动、工具专属鼠标指针，左侧工具提供中文名称，顶部菜单精简为文件、地图和视图。修复顶部间距及首次编辑时初始取景覆盖手动缩放的问题；新建地图为仅含地面与入口的独立空白草稿，工程标签支持关闭与切换。AI 辅助改为默认折叠的底部双栏工作台，展开后自动适应剩余地图视口。新增独立于图层的本地参考图，仅在浏览器解码显示，支持选中移动、锁定、隐藏、替换、移除与不透明度调节，不上传服务器，并修复参考图被不透明地板覆盖的问题。MCP 接入说明与操作步骤统一收纳到右上角 MCP 弹层，AI 工作台仅显示选区、要求与任务状态，发送与清空框选操作集中在工作台标题栏。
+
+### Corrigido
+
+- **宝可梦决斗场「上届冠军」展示修复。** 修复每次开启新对决时重置状态导致 `prevChampion` 被清空、服务端与 `WorldSync` 未同步整点交接记录，以及远景/右下角排行榜卡片未清晰展示上届冠军的问题。
 
 ## [1.0.3] - 2026-10-16
 

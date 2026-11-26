@@ -180,7 +180,7 @@ export function renderAdminHtml(): string {
       color: var(--muted);
       margin-bottom: 6px;
     }
-    input[type="text"], input[type="password"], select {
+    input[type="text"], input[type="password"], input[type="time"], select {
       width: 100%;
       padding: 9px 12px;
       border-radius: 10px;
@@ -458,6 +458,22 @@ export function renderAdminHtml(): string {
                 <option value="all">显示全部活动气泡</option>
                 <option value="none">隐藏活动气泡</option>
               </select>
+            </div>
+          </div>
+          <div style="margin-top:8px;padding-top:12px;border-top:1px solid var(--border)">
+            <label style="display:inline-flex;align-items:center;gap:8px;margin:0 0 10px;cursor:pointer;color:var(--text)">
+              <input id="opt-lunch-enabled" type="checkbox" style="width:auto" checked />
+              <span>🍱 开启午饭时间（北京时间，所有小人去休息区或座位吃饭静坐，宝可梦和桌宠保持原活动）</span>
+            </label>
+            <div class="row" style="margin-bottom:0">
+              <div>
+                <label for="opt-lunch-start">午饭开始时间（北京时间）</label>
+                <input id="opt-lunch-start" type="time" value="12:00" />
+              </div>
+              <div>
+                <label for="opt-lunch-end">午饭结束时间（北京时间）</label>
+                <input id="opt-lunch-end" type="time" value="13:00" />
+              </div>
             </div>
           </div>
           <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-top:12px">
@@ -956,6 +972,9 @@ export function renderAdminHtml(): string {
       $('opt-liveliness').value = os.liveliness || 'lively';
       $('opt-bubbles').value = os.bubbles || 'important';
       $('opt-show-names').checked = os.showNames !== false;
+      $('opt-lunch-enabled').checked = os.lunchEnabled !== false;
+      $('opt-lunch-start').value = os.lunchStart || '12:00';
+      $('opt-lunch-end').value = os.lunchEnd || '13:00';
 
       cachedPets = data.pets || [];
       if (!selectedPetId && cachedPets.length) selectedPetId = cachedPets[0].id;
@@ -1452,6 +1471,9 @@ export function renderAdminHtml(): string {
         $('opt-liveliness').value = os.liveliness || 'lively';
         $('opt-bubbles').value = os.bubbles || 'important';
         $('opt-show-names').checked = os.showNames !== false;
+        $('opt-lunch-enabled').checked = os.lunchEnabled !== false;
+        $('opt-lunch-start').value = os.lunchStart || '12:00';
+        $('opt-lunch-end').value = os.lunchEnd || '13:00';
         msgEl.style.color = 'var(--ok)';
         msgEl.textContent = '✅ 已保存，所有大屏画面已实时更新';
       } catch (e) {
@@ -1468,6 +1490,9 @@ export function renderAdminHtml(): string {
         liveliness: $('opt-liveliness').value,
         bubbles: $('opt-bubbles').value,
         showNames: $('opt-show-names').checked,
+        lunchEnabled: $('opt-lunch-enabled').checked,
+        lunchStart: $('opt-lunch-start').value || '12:00',
+        lunchEnd: $('opt-lunch-end').value || '13:00',
       });
     });
 
@@ -1478,6 +1503,9 @@ export function renderAdminHtml(): string {
         liveliness: 'lively',
         bubbles: 'important',
         showNames: true,
+        lunchEnabled: true,
+        lunchStart: '12:00',
+        lunchEnd: '13:00',
       });
     });
 

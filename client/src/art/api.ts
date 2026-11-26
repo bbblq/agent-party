@@ -64,7 +64,8 @@ export type HeldItem = 'none' | 'coffee' | 'water' | 'papers' | 'laptop' | 'book
   | 'scissors' // pose 'rps': indicador e médio em V (tesoura)
   | 'phone' // celular (com 'read' ou 'sit': olhando a tela, polegar rolando; tela acesa azulada)
   | 'lipstick' // batom (pose 'groom')
-  | 'comb'; // pente (pose 'groom')
+  | 'comb' // pente (pose 'groom')
+  | 'lunch'; // marmita / bento de almoço (pose 'wait' / 'sit')
 
 export type HairStyle =
   | 'short' | 'buzz' | 'spiky' | 'side_part' | 'curly' | 'afro' | 'bob' | 'long' | 'ponytail' | 'bun' | 'pigtails'

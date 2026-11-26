@@ -340,13 +340,12 @@ function waitRig(rig: Rig, view: HeadView, f: number, held: HeldItem): void {
   else if (view === 'up') rig.ub += 1;
   else rig.lean = 1;
   const eat = f === 1;
-  if (held === 'popcorn') {
+  if (held === 'popcorn' || held === 'lunch') {
     rig.itemBehind = false;
     if (view === 'down') {
-      // Balde abraçado colado ao queixo: a desk_back (verso do monitor) esconde o sprite a partir de
-      // y≈26, então pipoca, aro e três listras precisam caber acima disso. A mão vai da lateral do
-      // balde (mastigando, boca aberta) até a boca (cobrindo-a, com uma pipoca entre os dedos).
-      rig.itemAt = [9, 17];
+      // Balde/marmita abraçado colado ao queixo: a desk_back (verso do monitor) esconde o sprite a partir de
+      // y≈26, então pipoca/marmita ficam acima disso. A mão vai da lateral do item (mastigando) até a boca.
+      rig.itemAt = held === 'lunch' ? [9, 18] : [9, 17];
       rig.armA = arm([6, 18], [6, 21], [9, 21]);
       rig.armB = eat ? arm([16, 18], [17, 19], [11, 15]) : arm([16, 18], [16, 20], [15, 20]);
       rig.mouth = eat ? 'none' : 'open';
@@ -1311,6 +1310,9 @@ function drawItem(dc: Dc, x: number, y: number): void {
     case 'popcorn':
       b.stamp(POPCORN, x, y, POPCORN_PAL);
       break;
+    case 'lunch':
+      b.stamp(BENTO, x, y, BENTO_PAL);
+      break;
     case 'controller':
       b.stamp(side ? CONTROLLER_SIDE : CONTROLLER, x, y, CONTROLLER_PAL);
       break;
@@ -1439,6 +1441,28 @@ const POPCORN_PAL: Palette = {
   W: '#cfc6b6', // listra branca na sombra (borda direita)
 };
 
+/** Marmita bento (6x6): arroz branco, legume verde, omelete e caixa vermelha. */
+const BENTO: readonly string[] = [
+  'aAAAAa',
+  'lwwggR',
+  'lwUyyR',
+  'lwwyyR',
+  'lrrrrd',
+  '.dddd.',
+];
+const BENTO_PAL: Palette = {
+  a: '#e9e3d6',
+  A: '#fbf8f1',
+  l: '#e05247',
+  r: '#c53b34',
+  R: '#9e2c27',
+  d: '#7c221e',
+  w: '#fff9e6',
+  U: '#e84855',
+  y: '#ffd75e',
+  g: '#59b85d',
+};
+
 /** Posição do item em relação à mão (mão = último ponto do braço B, em coordenadas desenhadas). */
 function itemPos(dc: Dc): Pt | null {
   const { r } = dc;
@@ -1466,7 +1490,8 @@ function itemPos(dc: Dc): Pt | null {
     case 'paddle':
       return r.view === 'side' ? [hx - 2, hy - 5] : [hx + 1, hy - 4];
     case 'popcorn':
-      // Segurado pela lateral do balde (a mão fica na borda de trás/esquerda).
+    case 'lunch':
+      // Segurado pela lateral do balde/marmita (a mão fica na borda de trás/esquerda).
       return r.view === 'side' ? [hx - 5, hy - 4] : [hx + 1, hy - 4];
     case 'controller':
       return r.view === 'side' ? [hx - 2, hy] : [hx - 2, hy];

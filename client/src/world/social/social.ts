@@ -111,6 +111,7 @@ export class Social {
    */
   canJoin(c: Character, now: number): boolean {
     if (this.sim.arena.isBusy(c.id)) return false;
+    if (this.sim.isCharacterOnLunch(c, now)) return false;
     if (c.gone || c.leaving || c.arriving || c.inside || c.gathering) return false;
     if (c.mode !== 'idle' && c.mode !== 'shell') return false;
     if (c.step || c.queue.length) return false;

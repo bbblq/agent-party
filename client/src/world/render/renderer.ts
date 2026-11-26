@@ -22,7 +22,7 @@ import { RoomFxRenderer } from './github-fx';
 import { Lighting } from './lighting';
 import { Particles } from './particles';
 import { carSprite, propSprite, shadowSprite } from './props';
-import { drawCodexPetFrame } from './pet-sprites';
+import { drawCodexPetFrame, warmUpPetCombatSprites, type PetCombatPose } from './pet-sprites';
 import { countBadge, fallbackIcon } from './shell-sprites';
 import { decorateElevator, drawSeasonalLights, drawSeasonalWindow, seasonalCostume, seasonalFurniture } from './seasonal';
 import { makeCustomPlaceholderVis } from './custom-area-vis';
@@ -953,6 +953,7 @@ export class Renderer {
     const owner = f.seatSpot ? this.sim.spots.ownerOf(f.seatSpot) : undefined;
     const ch = owner ? this.sim.chars.get(owner) : undefined;
     if (!ch || ch.leaving) return 'off';
+    if (this.sim.isCharacterOnLunch(ch)) return 'idle';
     const seated = ch.atSpot === f.seatSpot;
     if (ch.mode === 'wait') return 'alert';
     if (!seated) return 'idle';
@@ -978,14 +979,107 @@ export class Renderer {
   private drawCharacter(ch: Character, now: number, sel: { agent: string | null; hover: string | null }): void {
     const { ctx } = this;
     const head = this.headOf(ch);
-    const afx = this.sim.arena.state.fx;
-    const hitDx = afx && afx.toId === ch.id && now >= afx.at && now <= afx.until ? Math.round(Math.sin(now / 22) * 1.5) : 0;
+    const st = this.sim.arena.state;
+    const afx = st.fx;
+    const isArenaFighter =
+      (st.phase === 'gather' || st.phase === 'fight' || st.phase === 'finish') &&
+      (ch.id === st.leftId || ch.id === st.rightId);
+
+    let combatDx = 0;
+    let combatDy = 0;
+    let combatPose: PetCombatPose | undefined;
+    let combatAnimT: number | undefined;
+    let hitFlash = false;
+    let ghostAfterimage = false;
+
+    if (isArenaFighter) {
+      if (ch.info.pet) warmUpPetCombatSprites(ch.info.pet);
+      if (st.phase === 'finish' && st.winnerId && ch.id !== st.winnerId) {
+        combatPose = 'faint';
+        combatAnimT = Math.max(0, now - (st.endsAt - 6000));
+      } else if (st.phase === 'fight' && afx && now >= afx.at && now <= afx.until) {
+        const span = Math.max(1, afx.until - afx.at);
+        const elapsed = now - afx.at;
+        const u = Math.max(0, Math.min(1, elapsed / span));
+        const hitR = afx.hitRatio ?? 0.38;
+        const oppId = afx.fromId === ch.id ? afx.toId : afx.fromId;
+        const opp = this.sim.chars.get(oppId);
+
+        if (afx.fromId === ch.id) {
+          combatAnimT = elapsed;
+          if (afx.category === 'physical') {
+            combatPose = 'attack_melee';
+            if (opp) {
+              const distX = (opp.x - ch.x) * 0.58;
+              const distY = (opp.y - ch.y) * 0.58;
+              const windEnd = hitR * 0.35;
+              const peakEnd = Math.min(1, hitR + 0.14);
+              const retEnd = Math.min(1, hitR + 0.45);
+              let factor = 0;
+              if (u < windEnd) {
+                factor = -0.1 * Math.sin((u / Math.max(0.05, windEnd)) * Math.PI);
+              } else if (u < hitR) {
+                const k = (u - windEnd) / Math.max(0.05, hitR - windEnd);
+                factor = k * k;
+              } else if (u < peakEnd) {
+                factor = 1;
+              } else if (u < retEnd) {
+                factor = 1 - (u - peakEnd) / Math.max(0.05, retEnd - peakEnd);
+              }
+              combatDx = Math.round(distX * factor);
+              combatDy = Math.round(distY * factor - (factor > 0 ? Math.sin(Math.min(1, factor) * Math.PI) * 3.5 : 0));
+            }
+          } else if (afx.category === 'status') {
+            combatPose = 'charge';
+            combatDy = Math.round(-Math.abs(Math.sin(u * Math.PI * 2)) * 3);
+          } else {
+            combatPose = 'attack_range';
+            const recoil = Math.exp(-Math.pow((u - hitR) * 8, 2));
+            const awayX = opp ? (ch.x >= opp.x ? 1 : -1) : 1;
+            combatDx = Math.round(awayX * recoil * 3);
+          }
+        } else if (afx.toId === ch.id && afx.category !== 'status' && u >= hitR) {
+          const postU = (u - hitR) / Math.max(0.05, 1 - hitR);
+          combatAnimT = Math.max(0, elapsed - hitR * span);
+          const awaySign = opp ? (ch.x >= opp.x ? 1 : -1) : 1;
+          if (afx.dodged) {
+            combatPose = 'dodge';
+            ghostAfterimage = postU < 0.65;
+            const arc = Math.sin(Math.min(1, postU * 1.55) * Math.PI);
+            combatDx = Math.round(awaySign * arc * 11);
+            combatDy = Math.round(-arc * 5);
+          } else if ((afx.damage ?? 0) > 0) {
+            combatPose = afx.ko ? 'faint' : 'hurt';
+            combatDx = Math.round(awaySign * (1 - postU) * 6 + Math.sin(now / 18) * (1 - postU) * 2.5);
+            hitFlash = postU < 0.22;
+          }
+        }
+      }
+    }
+
     // faixa lateral de quem anda (dois no mesmo caminho não viram um boneco de duas cabeças)
-    const x = Math.round(ch.x + ch.offX) + hitDx;
-    const y = Math.round(ch.y + ch.offY);
+    const baseX = Math.round(ch.x + ch.offX);
+    const baseY = Math.round(ch.y + ch.offY);
+    const x = baseX + combatDx;
+    const y = baseY + combatDy;
+    const onLunch = this.sim.isCharacterOnLunch(ch);
     ctx.globalAlpha = ch.alpha;
+
+    const awakened =
+      st.phase === 'fight' && ((ch.id === st.leftId && !!st.leftAwakened) || (ch.id === st.rightId && !!st.rightAwakened));
+    if (awakened) {
+      const pulse = 0.45 + Math.sin(now / 110) * 0.25;
+      ctx.save();
+      ctx.strokeStyle = `rgba(251, 146, 60, ${pulse})`;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.ellipse(x, y - 1, 11 + Math.sin(now / 130) * 1.5, 5.5, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
     // anéis no chão (seleção, hover, alerta)
-    if (ch.mode === 'wait') this.drawAlertRing(x, y, now);
+    if (ch.mode === 'wait' && !onLunch) this.drawAlertRing(x, y, now);
     if (sel.agent === ch.id) this.drawRing(x, y, '#7fe3ff', now, true);
     else if (sel.hover === ch.id) this.drawRing(x, y, '#ffffff', now, false);
     if (!ch.seated) {
@@ -995,6 +1089,28 @@ export class Renderer {
     if (ch.dir === 'left' || ch.dir === 'right') {
       this.lastHorizDir.set(ch.id, ch.dir);
     }
+    const lastHoriz = this.lastHorizDir.get(ch.id) ?? 'right';
+
+    if (ghostAfterimage && ch.info.pet) {
+      ctx.save();
+      ctx.globalAlpha = ch.alpha * 0.32;
+      drawCodexPetFrame(
+        ctx,
+        ch.info.pet,
+        {
+          pose: ch.pose,
+          dir: ch.dir,
+          mode: ch.mode,
+          animT: ch.animT,
+          lastHorizDir: lastHoriz,
+          combatPose: 'dodge',
+        },
+        baseX,
+        baseY,
+      );
+      ctx.restore();
+    }
+
     const petBox = ch.info.pet
       ? drawCodexPetFrame(
           ctx,
@@ -1003,8 +1119,9 @@ export class Renderer {
             pose: ch.pose,
             dir: ch.dir,
             mode: ch.mode,
-            animT: ch.animT,
-            lastHorizDir: this.lastHorizDir.get(ch.id) ?? 'right',
+            animT: combatAnimT ?? ch.animT,
+            lastHorizDir: lastHoriz,
+            combatPose,
           },
           x,
           y,
@@ -1025,9 +1142,28 @@ export class Renderer {
       req.pose = ch.pose;
       req.held = ch.held;
       req.seated = ch.seated;
+      if (combatPose === 'attack_melee') {
+        req.pose = 'play';
+        req.held = 'laptop';
+      } else if (combatPose === 'attack_range') {
+        req.pose = 'use';
+        req.held = 'none';
+      } else if (combatPose === 'charge') {
+        req.pose = 'drink';
+        req.held = 'coffee';
+      } else if (combatPose === 'dodge') {
+        req.pose = 'run';
+        req.held = 'none';
+      } else if (combatPose === 'hurt') {
+        req.pose = 'sulk';
+        req.held = 'none';
+      } else if (combatPose === 'faint') {
+        req.pose = 'sleep';
+        req.held = 'none';
+      }
       req.costume = seasonalCostume(this.theme, ch.info.seed);
       try {
-        sprite = this.charSprite(req, ch.animT);
+        sprite = this.charSprite(req, combatAnimT ?? ch.animT);
       } catch {
         sprite = null;
       }
@@ -1042,6 +1178,12 @@ export class Renderer {
         }
       }
       if (sprite) {
+        if (ghostAfterimage) {
+          ctx.save();
+          ctx.globalAlpha = ch.alpha * 0.32;
+          ctx.drawImage(sprite.canvas, baseX - sprite.ax, baseY - sprite.ay);
+          ctx.restore();
+        }
         const sx = x - sprite.ax;
         const sy = y - sprite.ay;
         ctx.drawImage(sprite.canvas, sx, sy);
@@ -1059,14 +1201,35 @@ export class Renderer {
         head.y = y - 26;
       }
     }
+
+    if (hitFlash) {
+      ctx.save();
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.42)';
+      ctx.fillRect(Math.round(head.bx), Math.round(head.by), Math.round(head.bw), Math.round(head.bh));
+      ctx.restore();
+    }
+
+    if (combatPose === 'faint' && st.phase === 'finish') {
+      ctx.save();
+      const sy = head.y - 3;
+      for (let i = 0; i < 2; i++) {
+        const ang = now / 260 + i * Math.PI;
+        const sx = Math.round(x + Math.cos(ang) * 6);
+        const dy = Math.round(sy + Math.sin(ang) * 2);
+        ctx.fillStyle = i === 0 ? '#fde047' : '#ffffff';
+        ctx.fillRect(sx - 1, dy - 1, 2, 2);
+      }
+      ctx.restore();
+    }
+
     ctx.globalAlpha = 1;
     head.x = x;
     head.feetY = y;
     head.visible = true;
     head.depth = ch.depth();
     // ícone sobre a cabeça (desenhado depois da luz)
-    let name: IconName | null = ch.mode === 'wait' ? 'alert' : ch.icon;
-    const shell = ch.mode === 'shell' && ch.shellSince > 0 && !ch.leaving;
+    let name: IconName | null = !onLunch && ch.mode === 'wait' ? 'alert' : ch.icon;
+    const shell = !onLunch && ch.mode === 'shell' && ch.shellSince > 0 && !ch.leaving;
     let badge = 0;
     if (shell && (!name || name === 'zzz')) {
       // ampulheta virando (com "×N" quando há mais de um shell)
@@ -1134,6 +1297,7 @@ export class Renderer {
     if (this.sim.visit) return;
     const { ctx } = this;
     for (const ch of this.sim.chars.values()) {
+      if (this.sim.isCharacterOnLunch(ch)) continue;
       if (ch.mode !== 'shell' || !ch.shellSince || ch.leaving || !ch.seated || ch.atSpot !== ch.homeSpot) continue;
       const scale = cobwebScale(now - ch.shellSince);
       if (!scale) continue;

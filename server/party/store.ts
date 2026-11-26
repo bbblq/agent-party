@@ -9,7 +9,7 @@ import {
   parseSeed,
   type AppearanceParts,
 } from '../../shared/appearance';
-import { beijingHourBucket } from '../../shared/beijing';
+import { beijingHourBucket, DEFAULT_LUNCH_END, DEFAULT_LUNCH_START, normalizeTimeHm } from '../../shared/beijing';
 import { hash32 } from '../../shared/hash';
 import type { Activity, AgentInfo, AgentPetInfo, AgentStatus, ArenaChampionRecord, ArenaLeaderboardEntry, OfficeGlobalSettings, OfficeSnapshot, RoomInfo } from '../../shared/types';
 import type { PetRegistry } from './pets';
@@ -77,6 +77,9 @@ export const DEFAULT_OFFICE_SETTINGS: OfficeGlobalSettings = {
   liveliness: 'lively',
   bubbles: 'important',
   showNames: true,
+  lunchEnabled: true,
+  lunchStart: DEFAULT_LUNCH_START,
+  lunchEnd: DEFAULT_LUNCH_END,
 };
 
 export interface SiteSettings {
@@ -109,6 +112,15 @@ export function sanitizeOfficeSettings(
       ? (o.bubbles as OfficeGlobalSettings['bubbles'])
       : base.bubbles,
     showNames: typeof o.showNames === 'boolean' ? o.showNames : base.showNames,
+    lunchEnabled: typeof o.lunchEnabled === 'boolean' ? o.lunchEnabled : (base.lunchEnabled ?? true),
+    lunchStart:
+      o.lunchStart !== undefined
+        ? normalizeTimeHm(o.lunchStart, base.lunchStart ?? DEFAULT_LUNCH_START)
+        : (base.lunchStart ?? DEFAULT_LUNCH_START),
+    lunchEnd:
+      o.lunchEnd !== undefined
+        ? normalizeTimeHm(o.lunchEnd, base.lunchEnd ?? DEFAULT_LUNCH_END)
+        : (base.lunchEnd ?? DEFAULT_LUNCH_END),
   };
 }
 
@@ -216,6 +228,7 @@ function randomSeed(): number {
 }
 
 export class PartyStore {
+  private readonly dataDir: string;
   private readonly statePath: string;
   private readonly workingTimeoutMs: number;
   private readonly offlineTimeoutMs: number;
@@ -237,6 +250,7 @@ export class PartyStore {
 
   constructor(cfg: StoreConfig) {
     mkdirSync(cfg.dataDir, { recursive: true });
+    this.dataDir = cfg.dataDir;
     this.statePath = join(cfg.dataDir, 'state.json');
     this.workingTimeoutMs = cfg.workingTimeoutMs ?? Number(process.env.WORKING_TIMEOUT_MS || 5 * 60_000);
     this.offlineTimeoutMs = cfg.offlineTimeoutMs ?? Number(process.env.OFFLINE_TIMEOUT_MS || 7 * 24 * 60 * 60_000);
@@ -379,6 +393,7 @@ export class PartyStore {
         }
         this.arenaLeaderboardHour = currentHour;
       }
+      if (this.dirty) this.scheduleSave();
     } catch (err) {
       console.warn('[store] failed to load state.json, starting fresh', err);
     }
@@ -389,6 +404,7 @@ export class PartyStore {
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
+      if (!existsSync(this.dataDir)) return;
       this.flush();
     }, 300);
   }
@@ -411,7 +427,8 @@ export class PartyStore {
       members: [...this.members.values()],
       banned: [...this.banned.values()],
       ...(Object.keys(settings).length ? { settings } : {}),
-      ...(arenaLeaderboard.length ? { arenaLeaderboard, arenaLeaderboardHour: this.arenaLeaderboardHour } : {}),
+      ...(arenaLeaderboard.length ? { arenaLeaderboard } : {}),
+      ...(arenaLeaderboard.length || this.prevArenaChampion ? { arenaLeaderboardHour: this.arenaLeaderboardHour } : {}),
       ...(this.prevArenaChampion ? { prevArenaChampion: this.prevArenaChampion } : {}),
     };
     const tmp = `${this.statePath}.tmp`;

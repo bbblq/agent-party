@@ -21,6 +21,10 @@ export interface WorldOptions {
   daylight?: DaylightMode;
   /** Tema visual: automático (segue o calendário; ver seasonalThemeFor), nenhum, Natal ou Halloween. */
   theme?: OfficeTheme;
+  /** Horário de almoço (Pequim UTC+8): humanos vão sentar para comer; pets/Pokémon seguem normais. */
+  lunchEnabled?: boolean;
+  lunchStart?: string;
+  lunchEnd?: string;
 }
 
 /** Tema que o renderer desenha: o escritório original ('none') ou um dos sazonais. */

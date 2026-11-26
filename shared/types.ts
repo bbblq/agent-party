@@ -346,6 +346,9 @@ export interface OfficeGlobalSettings {
   liveliness: 'calm' | 'normal' | 'lively';
   bubbles: 'all' | 'important' | 'none';
   showNames: boolean;
+  lunchEnabled?: boolean;
+  lunchStart?: string;
+  lunchEnd?: string;
 }
 
 export interface OfficeSnapshot {
@@ -779,6 +782,26 @@ export interface CodexV2Spec {
   states?: Partial<Record<string, CodexV2StateSpec>>;
 }
 
+export type PokemonType =
+  | 'normal'
+  | 'fire'
+  | 'water'
+  | 'electric'
+  | 'grass'
+  | 'ice'
+  | 'fighting'
+  | 'poison'
+  | 'ground'
+  | 'flying'
+  | 'psychic'
+  | 'bug'
+  | 'rock'
+  | 'ghost'
+  | 'dragon'
+  | 'dark'
+  | 'steel'
+  | 'fairy';
+
 export interface PmdAnimSpec {
   url: string;
   frameWidth: number;
@@ -786,6 +809,9 @@ export interface PmdAnimSpec {
   frames: number;
   durations: number[];
   rows: number;
+  rushFrame?: number;
+  hitFrame?: number;
+  returnFrame?: number;
 }
 
 export interface AgentPetInfo {
@@ -794,9 +820,11 @@ export interface AgentPetInfo {
   kind?: 'codex-v2' | 'pmd';
   spriteUrl: string;
   hasBackView?: boolean;
+  types?: PokemonType[];
   spec?: CodexV2Spec;
   pmd?: {
     dex: string;
+    schemaVersion?: number;
     walk: PmdAnimSpec;
     idle?: PmdAnimSpec;
     hop?: PmdAnimSpec;
@@ -804,6 +832,10 @@ export interface AgentPetInfo {
     eat?: PmdAnimSpec;
     work?: PmdAnimSpec;
     hurt?: PmdAnimSpec;
+    attack?: PmdAnimSpec;
+    shoot?: PmdAnimSpec;
+    charge?: PmdAnimSpec;
+    faint?: PmdAnimSpec;
   };
 }
 
@@ -850,7 +882,26 @@ export interface SyncedGathering {
   members: Array<{ id: string; role: string; left?: boolean }>;
 }
 
-export type ArenaFxKind = 'thunder' | 'fire' | 'water' | 'beam' | 'slash' | 'star';
+export type ArenaFxKind =
+  | 'thunder'
+  | 'fire'
+  | 'water'
+  | 'beam'
+  | 'slash'
+  | 'star'
+  | 'grass'
+  | 'ice'
+  | 'fighting'
+  | 'poison'
+  | 'ground'
+  | 'rock'
+  | 'ghost'
+  | 'psychic'
+  | 'dragon'
+  | 'fairy'
+  | 'buff';
+
+export type ArenaEffectiveness = 'normal' | 'super' | 'double_super' | 'not_very' | 'immune';
 
 export interface SyncedArenaFx {
   id: number;
@@ -860,6 +911,16 @@ export interface SyncedArenaFx {
   moveName: string;
   at: number;
   until: number;
+  category?: 'physical' | 'special' | 'status';
+  moveType?: PokemonType;
+  damage?: number;
+  prevTargetHp?: number;
+  effectiveness?: ArenaEffectiveness;
+  crit?: boolean;
+  dodged?: boolean;
+  buffText?: string;
+  ko?: boolean;
+  hitRatio?: number;
 }
 
 export interface ArenaLeaderboardEntry {
@@ -884,9 +945,13 @@ export interface SyncedArenaState {
   leftId?: string;
   leftName?: string;
   leftHp: number;
+  leftTypes?: PokemonType[];
+  leftAwakened?: boolean;
   rightId?: string;
   rightName?: string;
   rightHp: number;
+  rightTypes?: PokemonType[];
+  rightAwakened?: boolean;
   startedAt: number;
   endsAt: number;
   durationMs: number;

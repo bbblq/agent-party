@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Appearance, ArtModule, RoomTheme } from '../../client/src/art/api';
-import { beijingHourBucket, beijingParts } from '../../shared/beijing';
+import { beijingHourBucket, beijingParts, isBeijingLunchTime, normalizeTimeHm } from '../../shared/beijing';
 import { getLocale, setLocale, tr } from '../../shared/i18n';
 import { DEFAULT_WORLD_OPTIONS, seasonalThemeFor } from '../../client/src/world/api';
 import { effectiveHour } from '../../client/src/world/render/daylight';
@@ -868,13 +868,30 @@ describe('Pokémon Duel Arena layout, lifecycle & leaderboard persistence', () =
     const pets = new PetRegistry(dir, null, null, join(process.cwd(), 'assets', 'default-pets'));
     const store = new PartyStore({ dataDir: dir, pets });
     expect(store.getOfficeSettings()).toEqual(DEFAULT_OFFICE_SETTINGS);
-    store.setOfficeSettings({ theme: 'none', daylight: 'night', liveliness: 'calm', bubbles: 'none', showNames: false });
+    expect(DEFAULT_OFFICE_SETTINGS).toMatchObject({
+      lunchEnabled: true,
+      lunchStart: '12:00',
+      lunchEnd: '13:00',
+    });
+    store.setOfficeSettings({
+      theme: 'none',
+      daylight: 'night',
+      liveliness: 'calm',
+      bubbles: 'none',
+      showNames: false,
+      lunchEnabled: false,
+      lunchStart: '11:45',
+      lunchEnd: '13:15',
+    });
     expect(store.toSnapshot().meta.officeSettings).toEqual({
       theme: 'none',
       daylight: 'night',
       liveliness: 'calm',
       bubbles: 'none',
       showNames: false,
+      lunchEnabled: false,
+      lunchStart: '11:45',
+      lunchEnd: '13:15',
     });
     store.flush();
     const reloaded = new PartyStore({ dataDir: dir, pets });
@@ -884,6 +901,9 @@ describe('Pokémon Duel Arena layout, lifecycle & leaderboard persistence', () =
       liveliness: 'calm',
       bubbles: 'none',
       showNames: false,
+      lunchEnabled: false,
+      lunchStart: '11:45',
+      lunchEnd: '13:15',
     });
 
     // Event-driven WorldSync emits arena only when arena changes, driving browser Sim (synced: false)
@@ -1289,7 +1309,7 @@ describe('Pokémon Duel Arena layout, lifecycle & leaderboard persistence', () =
       hourBucket: hourHBucket,
     });
 
-    // Also verify WorldSync emits arena event with prevChampion on hourly rollover
+    // Also verify WorldSync emits arena event with prevChampion on hourly rollover AND preserves prevChampion across new duels
     const ws = new WorldSync(reloaded.toSnapshot(hourH), {
       initialLeaderboard: [
         { id: 'p2', name: '可达鸭', wins: 3, losses: 1 },
@@ -1304,6 +1324,42 @@ describe('Pokémon Duel Arena layout, lifecycle & leaderboard persistence', () =
     const lastEv = arenaEvents.at(-1);
     expect(lastEv?.arena.leaderboard).toEqual([]);
     expect(lastEv?.arena.prevChampion).toMatchObject({ id: 'p2', name: '可达鸭', wins: 3, losses: 1 });
+
+    // Stepping into next hour preserves prevChampion cleanly; whether an auto-duel already entered 'gather'
+    // or we trigger one explicitly, prevChampion MUST stay intact across gather -> fight -> finish -> idle!
+    let duelNow = hourNext + 5_000;
+    if (ws.sim.arena.state.phase === 'idle') {
+      const res = ws.sim.arena.triggerNow(duelNow);
+      expect(res.ok).toBe(true);
+    }
+    expect(ws.sim.arena.state.phase).toBe('gather');
+    expect(ws.sim.arena.toSyncedState().prevChampion).toMatchObject({ id: 'p2', name: '可达鸭', wins: 3, losses: 1 });
+
+    while (ws.sim.arena.state.phase === 'gather' && duelNow < hourNext + 40_000) {
+      duelNow += 250;
+      ws.step(duelNow);
+      expect(ws.sim.arena.toSyncedState().prevChampion).toMatchObject({ id: 'p2', name: '可达鸭', wins: 3, losses: 1 });
+    }
+    expect(ws.sim.arena.state.phase).toBe('fight');
+    while (ws.sim.arena.state.phase === 'fight' && duelNow < hourNext + 140_000) {
+      duelNow += 250;
+      ws.step(duelNow);
+      expect(ws.sim.arena.toSyncedState().prevChampion).toMatchObject({ id: 'p2', name: '可达鸭', wins: 3, losses: 1 });
+    }
+    expect(ws.sim.arena.state.phase).toBe('finish');
+    while (ws.sim.arena.state.phase === 'finish' && duelNow < hourNext + 160_000) {
+      duelNow += 250;
+      ws.step(duelNow);
+      expect(ws.sim.arena.toSyncedState().prevChampion).toMatchObject({ id: 'p2', name: '可达鸭', wins: 3, losses: 1 });
+    }
+    expect(ws.sim.arena.state.phase).toBe('idle');
+    expect(ws.sim.arena.toSyncedState().prevChampion).toMatchObject({ id: 'p2', name: '可达鸭', wins: 3, losses: 1 });
+
+    // Also verify triggerNow keeps prevChampion on a subsequent manual duel
+    const trig = ws.sim.arena.triggerNow(duelNow + 100);
+    expect(trig.ok).toBe(true);
+    expect(ws.sim.arena.state.phase).toBe('gather');
+    expect(ws.sim.arena.toSyncedState().prevChampion).toMatchObject({ id: 'p2', name: '可达鸭', wins: 3, losses: 1 });
   });
 
   it('supports self-service duel toggles, full 1025 Pokemon search in /customize, and redesigned Codex V2 upload UI in /admin', () => {
@@ -1369,6 +1425,9 @@ describe('Pokémon Duel Arena layout, lifecycle & leaderboard persistence', () =
     expect(adminHtml).toContain('可选');
     expect(adminHtml).toContain('随机男生');
     expect(adminHtml).toContain('随机女生');
+    expect(adminHtml).toContain('opt-lunch-enabled');
+    expect(adminHtml).toContain('opt-lunch-start');
+    expect(adminHtml).toContain('opt-lunch-end');
     const adminScript = /<script>([\s\S]*?)<\/script>/.exec(adminHtml);
     expect(adminScript).toBeTruthy();
     expect(() => new Function(adminScript![1])).not.toThrow();
@@ -1482,5 +1541,230 @@ describe('Pokémon Duel Arena layout, lifecycle & leaderboard persistence', () =
       text: '荣膺上届决斗场冠军（3胜1负）！',
     });
     expect(tracker.diffArena(champEv)).toEqual([]);
+  });
+
+  it('sends humans to break seats to eat quietly during lunch break (12:00-13:00 Beijing time) while keeping Pokémon & pets active', () => {
+    expect(normalizeTimeHm(' 12：05 ', '12:00')).toBe('12:05');
+    expect(normalizeTimeHm('invalid', '12:00')).toBe('12:00');
+    // 2026-06-01 11:55, 12:05, 12:59, 13:00 Beijing Time = 03:55, 04:05, 04:59, 05:00 UTC
+    const beforeLunch = Date.UTC(2026, 5, 1, 3, 55, 0);
+    const duringLunch = Date.UTC(2026, 5, 1, 4, 5, 0);
+    const endOfLunch = Date.UTC(2026, 5, 1, 5, 0, 0);
+    expect(isBeijingLunchTime(beforeLunch)).toBe(false);
+    expect(isBeijingLunchTime(duringLunch)).toBe(true);
+    expect(isBeijingLunchTime(endOfLunch)).toBe(false);
+    expect(isBeijingLunchTime(duringLunch, { lunchEnabled: false })).toBe(false);
+
+    const dir = makeTempDir();
+    const pets = new PetRegistry(dir, null, null, join(process.cwd(), 'assets', 'default-pets'));
+    const store = new PartyStore({ dataDir: dir, pets });
+
+    store.report({ id: 'h-work', name: '小明', status: 'working' }, beforeLunch);
+    store.report({ id: 'h-wait', name: '小红', status: 'waiting' }, beforeLunch);
+    store.report({ id: 'h-idle', name: '小刚', status: 'idle' }, beforeLunch);
+    store.report({ id: 'p-sno', name: '卡比兽', status: 'working', petId: 'snorlax' }, beforeLunch);
+    store.report({ id: 'p-psy', name: '可达鸭', status: 'idle', petId: 'psyduck-3d' }, beforeLunch);
+    store.report({ id: 'p-fish', name: '大肥鱼', status: 'working', petId: 'dafeiyu' }, beforeLunch);
+
+    const sim = new Sim(stubArt, () => ({ ...DEFAULT_WORLD_OPTIONS, liveliness: 'lively' }), null);
+    sim.applySnapshot(store.toSnapshot(beforeLunch), beforeLunch);
+
+    let now = beforeLunch;
+    for (let i = 0; i < 8; i++) {
+      now += 250;
+      sim.update(0.25, now);
+    }
+    const hWork = sim.chars.get('h-work')!;
+    const hWait = sim.chars.get('h-wait')!;
+    const hIdle = sim.chars.get('h-idle')!;
+    const pSno = sim.chars.get('p-sno')!;
+    const pFish = sim.chars.get('p-fish')!;
+    expect(hWork.pose).toBe('type');
+    expect(pSno.pose).toBe('type');
+    expect(pFish.pose).toBe('type');
+
+    // Cross into 12:05 Beijing Time (lunch begins)
+    now = duringLunch;
+    sim.update(0.25, now);
+    for (let i = 0; i < 160; i++) {
+      now += 250;
+      sim.update(0.25, now);
+    }
+
+    for (const h of [hWork, hWait, hIdle]) {
+      expect(sim.isCharacterOnLunch(h, now)).toBe(true);
+      expect(h.seated).toBe(true);
+      expect(h.pose).toBe('wait');
+      expect(h.held).toBe('lunch');
+      const spot = sim.spots.get(h.atSpot);
+      expect(spot).toBeTruthy();
+      expect(['cafe_seat', 'sofa', 'armchair', 'beanbag']).toContain(spot!.kind);
+    }
+
+    // Record positions and verify humans stay completely still even if status flips mid-lunch
+    const snapCoords = [hWork, hWait, hIdle].map((c) => ({ x: c.x, y: c.y, atSpot: c.atSpot }));
+    store.report({ id: 'h-work', status: 'idle' }, now + 500);
+    store.report({ id: 'h-work', status: 'working' }, now + 1000);
+    sim.applySnapshot(store.toSnapshot(now + 1000), now + 1000);
+    for (let i = 0; i < 240; i++) {
+      now += 250;
+      sim.update(0.25, now);
+    }
+    [hWork, hWait, hIdle].forEach((c, idx) => {
+      expect(c.x).toBe(snapCoords[idx].x);
+      expect(c.y).toBe(snapCoords[idx].y);
+      expect(c.atSpot).toBe(snapCoords[idx].atSpot);
+      expect(c.pose).toBe('wait');
+      expect(c.held).toBe('lunch');
+    });
+
+    // Meanwhile Pokémon and desktop pets remain active and can even duel in the Arena
+    expect(sim.isCharacterOnLunch(pSno, now)).toBe(false);
+    expect(sim.isCharacterOnLunch(pFish, now)).toBe(false);
+    expect(pFish.pose).toBe('type');
+    expect(pFish.held).not.toBe('lunch');
+    if (sim.arena.state.phase === 'idle') {
+      const arenaTrig = sim.arena.triggerNow(now + 100);
+      expect(arenaTrig.ok).toBe(true);
+    }
+    expect(['gather', 'fight', 'finish']).toContain(sim.arena.state.phase);
+    expect([sim.arena.state.leftId, sim.arena.state.rightId].sort()).toEqual(['p-psy', 'p-sno']);
+    expect(sim.arena.state.watchers).not.toContain('h-work');
+    expect(sim.arena.state.watchers).not.toContain('h-wait');
+    expect(sim.arena.state.watchers).not.toContain('h-idle');
+
+    // Cross 13:01 Beijing Time (lunch ends) -> humans walk back to desks and resume working
+    now = endOfLunch + 60_000;
+    sim.update(0.25, now);
+    for (let i = 0; i < 160; i++) {
+      now += 250;
+      sim.update(0.25, now);
+    }
+    expect(sim.isCharacterOnLunch(hWork, now)).toBe(false);
+    expect(hWork.atSpot).toBe(hWork.homeSpot);
+    expect(hWork.pose).toBe('type');
+    expect(hWork.held).toBe('none');
+    expect(hWait.atSpot).toBe(hWait.homeSpot);
+    expect(hWait.pose).toBe('raise_hand');
+
+    // Turning lunchEnabled=false in admin settings disables lunch even during 12:00-13:00
+    store.setOfficeSettings({ lunchEnabled: false });
+    const simDisabled = new Sim(
+      stubArt,
+      () => ({
+        ...DEFAULT_WORLD_OPTIONS,
+        lunchEnabled: store.getOfficeSettings().lunchEnabled,
+        lunchStart: store.getOfficeSettings().lunchStart,
+        lunchEnd: store.getOfficeSettings().lunchEnd,
+      }),
+      null,
+    );
+    simDisabled.applySnapshot(store.toSnapshot(duringLunch), duringLunch);
+    simDisabled.update(0.25, duringLunch + 250);
+    expect(simDisabled.isLunchTime(duringLunch + 250)).toBe(false);
+    expect(simDisabled.chars.get('h-work')!.pose).toBe('type');
+  });
+
+  it('parses SpriteCollab combat frame tags (RushFrame/HitFrame/ReturnFrame) and resolves PMD/Codex combat poses', () => {
+    const parsed = parseAnimDataXml(`
+      <AnimData>
+        <Anims>
+          <Anim>
+            <Name>Attack</Name>
+            <FrameWidth>80</FrameWidth>
+            <FrameHeight>80</FrameHeight>
+            <RushFrame>1</RushFrame>
+            <HitFrame>3</HitFrame>
+            <ReturnFrame>6</ReturnFrame>
+            <Durations><Duration>2</Duration><Duration>4</Duration></Durations>
+          </Anim>
+          <Anim>
+            <Name>Strike</Name>
+            <CopyOf>Attack</CopyOf>
+          </Anim>
+          <Anim>
+            <Name>Faint</Name>
+            <FrameWidth>48</FrameWidth>
+            <FrameHeight>48</FrameHeight>
+            <Durations><Duration>8</Duration><Duration>12</Duration></Durations>
+          </Anim>
+        </Anims>
+      </AnimData>
+    `);
+    expect(parsed.Attack).toMatchObject({ rushFrame: 1, hitFrame: 3, returnFrame: 6 });
+    expect(parsed.Strike).toMatchObject({ name: 'Strike', rushFrame: 1, hitFrame: 3, returnFrame: 6 });
+    expect(parsed.Faint).toMatchObject({ frameWidth: 48, frameHeight: 48 });
+
+    const pmd = {
+      dex: '0025',
+      walk: { url: '/w.png', frameWidth: 32, frameHeight: 40, frames: 4, durations: [120], rows: 8 },
+      idle: { url: '/i.png', frameWidth: 40, frameHeight: 56, frames: 2, durations: [200], rows: 8 },
+      attack: { url: '/a.png', frameWidth: 80, frameHeight: 80, frames: 4, durations: [80], rows: 8, hitFrame: 2 },
+      shoot: { url: '/s.png', frameWidth: 40, frameHeight: 56, frames: 4, durations: [80], rows: 8, hitFrame: 2 },
+      charge: { url: '/c.png', frameWidth: 48, frameHeight: 64, frames: 4, durations: [80], rows: 8 },
+      faint: { url: '/f.png', frameWidth: 48, frameHeight: 48, frames: 4, durations: [180], rows: 1 },
+    };
+    expect(pmdAnimForPose(pmd, 'stand', 'idle', 'right', 'attack_melee').url).toBe('/a.png');
+    expect(pmdAnimForPose(pmd, 'stand', 'idle', 'right', 'attack_range').url).toBe('/s.png');
+    expect(pmdAnimForPose(pmd, 'stand', 'idle', 'right', 'charge').url).toBe('/c.png');
+    expect(pmdAnimForPose(pmd, 'stand', 'idle', 'right', 'faint').url).toBe('/f.png');
+
+    expect(
+      resolveCodexFrame({
+        pose: 'stand',
+        dir: 'right',
+        mode: 'idle',
+        animT: 0,
+        lastHorizDir: 'right',
+        states: {},
+        actualRows: 11,
+        actualCols: 8,
+        combatPose: 'faint',
+      }),
+    ).toEqual({ row: 5, col: 7, flipX: false, offsetY: 2 });
+  });
+
+  it('runs a real HP=0 KO Arena battle preserving human & non-Pokémon pet Easter egg fighters', () => {
+    const dir = makeTempDir();
+    const pets = new PetRegistry(dir, null, null, join(process.cwd(), 'assets', 'default-pets'));
+    const store = new PartyStore({ dataDir: dir, pets });
+
+    // Non-lunch time in Beijing (10:00 Beijing = 02:00 UTC)
+    const startAt = Date.UTC(2026, 5, 1, 2, 0, 0);
+    store.report({ id: 'h-duel', name: '阿强', status: 'idle', agentTool: 'Claude Code', canDuel: true }, startAt);
+    store.report({ id: 'dfy-duel', name: '大肥鱼', status: 'idle', petId: 'dafeiyu', canDuel: true }, startAt);
+
+    const results: Array<{ winnerId: string; loserId: string }> = [];
+    const ws = new WorldSync(store.toSnapshot(startAt), {
+      onArenaResult: (winnerId, _wName, loserId) => {
+        results.push({ winnerId, loserId });
+      },
+    });
+    const trig = ws.sim.arena.triggerNow(startAt + 500);
+    expect(trig.ok).toBe(true);
+    expect(ws.sim.arena.state.leftTypes?.length).toBeGreaterThanOrEqual(1);
+    expect(ws.sim.arena.state.rightTypes?.length).toBeGreaterThanOrEqual(1);
+
+    let now = startAt + 500;
+    let sawRichFx = false;
+    let finishedEarlyOrAtEnd = false;
+    for (let i = 0; i < 360; i++) {
+      now += 250;
+      ws.step(now);
+      const st = ws.sim.arena.state;
+      if (st.fx && st.fx.category && st.fx.moveType && st.fx.effectiveness) {
+        sawRichFx = true;
+      }
+      if (st.phase === 'finish') {
+        finishedEarlyOrAtEnd = true;
+        expect(Math.min(st.leftHp, st.rightHp)).toBe(0);
+        expect(Math.max(st.leftHp, st.rightHp)).toBeGreaterThan(0);
+        break;
+      }
+    }
+    expect(sawRichFx).toBe(true);
+    expect(finishedEarlyOrAtEnd).toBe(true);
+    expect(results).toHaveLength(1);
+    expect([results[0].winnerId, results[0].loserId].sort()).toEqual(['dfy-duel', 'h-duel']);
   });
 });

@@ -46,6 +46,8 @@ function arenaSignature(a: SyncedArenaState): string {
     a.rightId ?? '',
     a.leftHp,
     a.rightHp,
+    a.leftAwakened ? 1 : 0,
+    a.rightAwakened ? 1 : 0,
     a.startedAt,
     a.endsAt,
     a.nextDuelAt ?? 0,
@@ -66,6 +68,7 @@ export class WorldSync {
   private lastArenaSig = '';
   private readonly listeners = new Set<(frame: WorldSyncFrame) => void>();
   private readonly arenaListeners = new Set<(ev: SyncedArenaEvent) => void>();
+  private latestOfficeSettings: OfficeSnapshot['meta']['officeSettings'];
 
   constructor(
     initialSnapshot: OfficeSnapshot,
@@ -77,13 +80,24 @@ export class WorldSync {
       onArenaLeaderboardReset?: (now: number) => void;
     },
   ) {
-    this.sim = new Sim(headlessArt, () => ({ ...DEFAULT_WORLD_OPTIONS, liveliness: 'lively' }), null);
-    if (opts?.initialLeaderboard) this.sim.arena.setLeaderboard(opts.initialLeaderboard);
+    this.latestOfficeSettings = initialSnapshot.meta?.officeSettings;
+    this.sim = new Sim(
+      headlessArt,
+      () => ({
+        ...DEFAULT_WORLD_OPTIONS,
+        liveliness: this.latestOfficeSettings?.liveliness ?? 'lively',
+        ...(this.latestOfficeSettings?.lunchEnabled !== undefined ? { lunchEnabled: this.latestOfficeSettings.lunchEnabled } : {}),
+        ...(this.latestOfficeSettings?.lunchStart !== undefined ? { lunchStart: this.latestOfficeSettings.lunchStart } : {}),
+        ...(this.latestOfficeSettings?.lunchEnd !== undefined ? { lunchEnd: this.latestOfficeSettings.lunchEnd } : {}),
+      }),
+      null,
+    );
+    const now = initialSnapshot.serverTime || Date.now();
+    if (opts?.initialLeaderboard) this.sim.arena.setLeaderboard(opts.initialLeaderboard, now);
     if (opts?.initialPrevChampion !== undefined) this.sim.arena.setPrevChampion(opts.initialPrevChampion);
     if (opts?.onArenaResult) this.sim.arena.onResult = opts.onArenaResult;
     if (opts?.onArenaLeaderboardReset) this.sim.arena.onLeaderboardReset = opts.onArenaLeaderboardReset;
     this.latestSnapRev = initialSnapshot.rev;
-    const now = Date.now();
     if (opts?.initialCustomMap) this.sim.setCustomMap(opts.initialCustomMap, now);
     this.sim.applySnapshot(initialSnapshot, now);
     this.sim.update(1 / 30, now);
@@ -127,6 +141,7 @@ export class WorldSync {
 
   applySnapshot(snap: OfficeSnapshot, now = Date.now()): void {
     this.latestSnapRev = snap.rev;
+    this.latestOfficeSettings = snap.meta?.officeSettings;
     this.sim.applySnapshot(snap, now);
     this.syncArenaChange(now);
     if (this.listeners.size > 0) {

@@ -44,6 +44,9 @@ export class Character {
   atSpot: string | null = null;
   /** Spots temporários reservados durante um passeio. */
   tempSpots: string[] = [];
+  /** Reserved lunch seat spot id & fallback tile during lunch break. */
+  lunchSpot: string | null = null;
+  lunchTile: { x: number; y: number } | null = null;
   roomId: string;
   leaving = false;
   gone = false;

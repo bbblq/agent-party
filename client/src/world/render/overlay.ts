@@ -625,6 +625,17 @@ export class Overlay {
 
   private bubbleFor(ch: Character, head: HeadInfo, now: number, opts: WorldOptions, selected: boolean, hovered: boolean): Bubble | null {
     if (opts.bubbles === 'none') return null;
+    if (this.sim.isCharacterOnLunch(ch)) {
+      if (ch.sayText && now < ch.sayUntil && !ch.leaving) {
+        const a = Math.min(1, (now - ch.sayAt) / 120, (ch.sayUntil - now) / 300);
+        return this.takeBubble(ch, head, sayIcon(ch.sayText), ch.sayText, 'say', 55, a, ch.sayAt);
+      }
+      if (selected || hovered || opts.bubbles === 'all') {
+        const prio = selected ? 80 : hovered ? 75 : 35;
+        return this.takeBubble(ch, head, '🍱', '午休干饭中', 'info', prio, 1, now);
+      }
+      return null;
+    }
     if (ch.mode === 'wait') return this.takeBubble(ch, head, '✋', this.sim.visit ? tr('Esperando o dono') : waitBubbleText(ch.info.waitingFor), 'alert', 100, 1, now);
     if (ch.bubbleText && now < ch.bubbleUntil) {
       const a = Math.min(1, (now - ch.bubbleAt) / 150, (ch.bubbleUntil - now) / 400);
@@ -924,7 +935,8 @@ export class Overlay {
     const { nameW, chipW, badgeW, codexW } = this.labelWidth(l);
     const { x, y, w, h } = l;
     const selected = sel.agent === ch.id;
-    ctx.fillStyle = selected ? 'rgba(18,96,140,0.95)' : ch.mode === 'wait' ? 'rgba(120,78,0,0.92)' : 'rgba(22,26,38,0.82)';
+    const isWaitAlert = ch.mode === 'wait' && !this.sim.isCharacterOnLunch(ch);
+    ctx.fillStyle = selected ? 'rgba(18,96,140,0.95)' : isWaitAlert ? 'rgba(120,78,0,0.92)' : 'rgba(22,26,38,0.82)';
     ctx.beginPath();
     ctx.roundRect(x, y, w, h, 7.5);
     ctx.fill();

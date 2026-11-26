@@ -2,10 +2,12 @@ import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import type { AgentPetInfo, PmdAnimSpec } from '../../shared/types';
+import type { AgentPetInfo, PmdAnimSpec, PokemonType } from '../../shared/types';
 import rawPokedex from './pokemon-db.json';
 
 const execFileAsync = promisify(execFile);
+
+export const PMD_META_SCHEMA_VERSION = 2;
 
 export interface PokemonEntry {
   id: number;
@@ -14,6 +16,7 @@ export interface PokemonEntry {
   zh_hans?: string;
   zh_hant?: string;
   ja?: string;
+  types?: PokemonType[];
 }
 
 export interface ParsedPmdAnim {
@@ -21,6 +24,9 @@ export interface ParsedPmdAnim {
   frameWidth: number;
   frameHeight: number;
   durations: number[];
+  rushFrame?: number;
+  hitFrame?: number;
+  returnFrame?: number;
 }
 
 export type EnsurePokemonResult =
@@ -205,6 +211,9 @@ export function parseAnimDataXml(xml: string): Record<string, ParsedPmdAnim> {
 
     const frameWidth = Math.max(8, Number(fwMatch[1]));
     const frameHeight = Math.max(8, Number(fhMatch[1]));
+    const rushMatch = /<RushFrame>\s*(\d+)\s*<\/RushFrame>/.exec(body);
+    const hitMatch = /<HitFrame>\s*(\d+)\s*<\/HitFrame>/.exec(body);
+    const returnMatch = /<ReturnFrame>\s*(\d+)\s*<\/ReturnFrame>/.exec(body);
     const durations: number[] = [];
     for (const dm of body.matchAll(/<Duration>\s*(\d+)\s*<\/Duration>/g)) {
       const ticks = Number(dm[1]);
@@ -212,7 +221,15 @@ export function parseAnimDataXml(xml: string): Record<string, ParsedPmdAnim> {
     }
     if (!durations.length) durations.push(160);
 
-    anims[name] = { name, frameWidth, frameHeight, durations };
+    anims[name] = {
+      name,
+      frameWidth,
+      frameHeight,
+      durations,
+      ...(rushMatch ? { rushFrame: Number(rushMatch[1]) } : {}),
+      ...(hitMatch ? { hitFrame: Number(hitMatch[1]) } : {}),
+      ...(returnMatch ? { returnFrame: Number(returnMatch[1]) } : {}),
+    };
   }
 
   for (const { name, copyOf } of copies) {
@@ -229,13 +246,44 @@ function readPngHeight(buf: Buffer): number | null {
   return buf.readUInt32BE(20);
 }
 
+const POKEDEX_BY_DEX = new Map(POKEDEX.map((p) => [p.dex, p]));
+const ATTACK_ANIM_CANDIDATES = ['Attack', 'Strike', 'QuickStrike', 'Slam', 'Swing', 'Slice', 'MultiScratch', 'Punch', 'Kick'] as const;
+const SHOOT_ANIM_CANDIDATES = ['Shoot', 'SpAttack', 'Emit', 'Beam', 'Shock'] as const;
+const CHARGE_ANIM_CANDIDATES = ['Shock', 'Charge', 'Double', 'Rotate', 'Pose', 'Appeal', 'TailWhip', 'DeepBreath', 'Twirl'] as const;
+
 export class PokemonService {
   private readonly dir: string;
   private readonly inflight = new Map<string, Promise<EnsurePokemonResult>>();
+  private readonly upgrading = new Set<string>();
+  private readonly upgradeListeners = new Set<(dex: string, pet: AgentPetInfo) => void>();
 
   constructor(dataDir: string) {
     this.dir = join(dataDir, 'pokemon');
     mkdirSync(this.dir, { recursive: true });
+  }
+
+  onUpgrade(cb: (dex: string, pet: AgentPetInfo) => void): () => void {
+    this.upgradeListeners.add(cb);
+    return () => void this.upgradeListeners.delete(cb);
+  }
+
+  private scheduleBackgroundUpgrade(dex: string): void {
+    if (process.env.VITEST === 'true' || this.upgrading.has(dex)) return;
+    const entry = POKEDEX_BY_DEX.get(dex);
+    if (!entry) return;
+    this.upgrading.add(dex);
+    void this.fetchAndCache(entry)
+      .then((res) => {
+        if (res.ok) {
+          for (const cb of this.upgradeListeners) cb(dex, res.pet);
+        }
+      })
+      .catch(() => {
+        // Offline or unreachable: keep v1 cache intact
+      })
+      .finally(() => {
+        this.upgrading.delete(dex);
+      });
   }
 
   getCachedPet(idOrDex: string): AgentPetInfo | undefined {
@@ -247,6 +295,13 @@ export class PokemonService {
       const pet = JSON.parse(readFileSync(metaPath, 'utf8')) as AgentPetInfo;
       if (pet.hasBackView === undefined && pet.pmd) {
         pet.hasBackView = [pet.pmd.walk, pet.pmd.idle, pet.pmd.hop].some((a) => !!a && a.rows >= 5);
+      }
+      if (!pet.types?.length) {
+        const entry = POKEDEX_BY_DEX.get(dex);
+        if (entry?.types?.length) pet.types = entry.types;
+      }
+      if (pet.pmd && (pet.pmd.schemaVersion ?? 1) < PMD_META_SCHEMA_VERSION) {
+        this.scheduleBackgroundUpgrade(dex);
       }
       return pet;
     } catch {
@@ -298,6 +353,9 @@ export class PokemonService {
   }
 
   private async fetchAndCache(p: PokemonEntry): Promise<EnsurePokemonResult> {
+    if (!existsSync(this.dir)) {
+      return { ok: false, code: 'FETCH_ERROR', pokemon: p, error: 'Pokemon cache directory unavailable' };
+    }
     const folder = join(this.dir, p.dex);
     mkdirSync(folder, { recursive: true });
 
@@ -330,7 +388,7 @@ export class PokemonService {
       }
       xml = res.data.toString('utf8');
       try {
-        writeFileSync(localXml, xml, 'utf8');
+        if (existsSync(folder)) writeFileSync(localXml, xml, 'utf8');
       } catch {
         // optional cache write
       }
@@ -341,35 +399,51 @@ export class PokemonService {
     const workName = workCandidates.find((name) => !!anims[name]);
     const sleepName = ['Sleep', 'EventSleep'].find((name) => !!anims[name]);
     const eatName = ['Eat', 'Pose'].find((name) => !!anims[name]);
+    const attackName = ATTACK_ANIM_CANDIDATES.find((name) => !!anims[name]);
+    const shootName = SHOOT_ANIM_CANDIDATES.find((name) => !!anims[name]);
+    const chargeName =
+      CHARGE_ANIM_CANDIDATES.find((name) => name !== shootName && !!anims[name]) ??
+      CHARGE_ANIM_CANDIDATES.find((name) => !!anims[name]);
+    const faintName = ['Faint'].find((name) => !!anims[name]);
 
-    const buildAnim = async (name: string): Promise<PmdAnimSpec | undefined> => {
-      const info = anims[name];
-      if (!info) return undefined;
-      const filename = `${name}-Anim.png`;
-      const localPath = join(folder, filename);
-      let buf: Buffer;
-      if (existsSync(localPath)) {
-        buf = readFileSync(localPath);
-      } else {
-        const r = await fetchSpriteFile(p.dex, filename);
-        if (!r || r.status !== 200 || !readPngHeight(r.data)) return undefined;
-        buf = r.data;
-        writeFileSync(localPath, buf);
-      }
-      const imgH = readPngHeight(buf);
-      if (!imgH) return undefined;
-      const rows = Math.max(1, Math.round(imgH / info.frameHeight));
-      return {
-        url: `/api/pokemon/${p.dex}/${filename}`,
-        frameWidth: info.frameWidth,
-        frameHeight: info.frameHeight,
-        frames: info.durations.length,
-        durations: info.durations,
-        rows,
-      };
+    const animTasks = new Map<string, Promise<PmdAnimSpec | undefined>>();
+    const buildAnim = (name: string): Promise<PmdAnimSpec | undefined> => {
+      const cachedTask = animTasks.get(name);
+      if (cachedTask) return cachedTask;
+      const task = (async (): Promise<PmdAnimSpec | undefined> => {
+        const info = anims[name];
+        if (!info) return undefined;
+        const filename = `${name}-Anim.png`;
+        const localPath = join(folder, filename);
+        let buf: Buffer;
+        if (existsSync(localPath)) {
+          buf = readFileSync(localPath);
+        } else {
+          const r = await fetchSpriteFile(p.dex, filename);
+          if (!r || r.status !== 200 || !readPngHeight(r.data)) return undefined;
+          buf = r.data;
+          if (existsSync(folder)) writeFileSync(localPath, buf);
+        }
+        const imgH = readPngHeight(buf);
+        if (!imgH) return undefined;
+        const rows = Math.max(1, Math.round(imgH / info.frameHeight));
+        return {
+          url: `/api/pokemon/${p.dex}/${filename}`,
+          frameWidth: info.frameWidth,
+          frameHeight: info.frameHeight,
+          frames: info.durations.length,
+          durations: info.durations,
+          rows,
+          ...(info.rushFrame !== undefined ? { rushFrame: info.rushFrame } : {}),
+          ...(info.hitFrame !== undefined ? { hitFrame: info.hitFrame } : {}),
+          ...(info.returnFrame !== undefined ? { returnFrame: info.returnFrame } : {}),
+        };
+      })();
+      animTasks.set(name, task);
+      return task;
     };
 
-    const [walk, idle, hop, hurt, sleep, eat, work] = await Promise.all([
+    const [walk, idle, hop, hurt, sleep, eat, work, attack, shoot, charge, faint] = await Promise.all([
       buildAnim('Walk'),
       buildAnim('Idle'),
       buildAnim('Hop'),
@@ -377,6 +451,10 @@ export class PokemonService {
       sleepName ? buildAnim(sleepName) : Promise.resolve(undefined),
       eatName ? buildAnim(eatName) : Promise.resolve(undefined),
       workName ? buildAnim(workName) : Promise.resolve(undefined),
+      attackName ? buildAnim(attackName) : Promise.resolve(undefined),
+      shootName ? buildAnim(shootName) : Promise.resolve(undefined),
+      chargeName ? buildAnim(chargeName) : Promise.resolve(undefined),
+      faintName ? buildAnim(faintName) : Promise.resolve(undefined),
     ]);
 
     const walkSpec = walk ?? idle ?? hop;
@@ -397,8 +475,10 @@ export class PokemonService {
       kind: 'pmd',
       spriteUrl: (idle ?? walkSpec).url,
       hasBackView,
+      ...(p.types?.length ? { types: p.types } : {}),
       pmd: {
         dex: p.dex,
+        schemaVersion: PMD_META_SCHEMA_VERSION,
         walk: walkSpec,
         ...(idle ? { idle } : {}),
         ...(hop ? { hop } : {}),
@@ -406,10 +486,16 @@ export class PokemonService {
         ...(eat ? { eat } : {}),
         ...(work ? { work } : {}),
         ...(hurt ? { hurt } : {}),
+        ...(attack ? { attack } : {}),
+        ...(shoot ? { shoot } : {}),
+        ...(charge ? { charge } : {}),
+        ...(faint ? { faint } : {}),
       },
     };
 
-    writeFileSync(join(folder, 'pmd-meta.json'), JSON.stringify(pet, null, 2), 'utf8');
+    if (existsSync(folder)) {
+      writeFileSync(join(folder, 'pmd-meta.json'), JSON.stringify(pet, null, 2), 'utf8');
+    }
     return { ok: true, pet, pokemon: p };
   }
 }

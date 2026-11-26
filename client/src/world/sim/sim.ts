@@ -40,6 +40,7 @@ import { countShells, latestShellDone, shellLabel, shellStage, shellWaitSince, s
 import { SpotRegistry } from './spots';
 import type { Step } from './steps';
 import { EXIT_RADIUS, NO_INTENT, stepFree, tileAt, VISITOR_LANYARD, type VisitorIntent } from './visitor';
+import { DEFAULT_LUNCH_END, DEFAULT_LUNCH_START, isBeijingLunchTime } from '../../../../shared/beijing';
 import { tr } from '../../../../shared/i18n';
 
 /**
@@ -158,6 +159,8 @@ export class Sim {
   /** Custom map mode document when active (null = default auto-expanding building). */
   customMap: CustomMapDocument | null = null;
   private customZoneNames = new Map<string, string>();
+  private lunchActive = false;
+  private lunchInitialized = false;
 
   /** `storage` das carteiras: null = só em memória (o timelapse não mexe nas moedinhas de verdade). */
   constructor(
@@ -188,6 +191,7 @@ export class Sim {
     if (input.meta?.receptionSign !== undefined) {
       this.receptionSign = input.meta.receptionSign.trim() || 'Agent Party';
     }
+    this.syncLunchState(now);
     const first = !this.initialized;
     const immediateRooms = first || this.synced;
     this.initialized = true;
@@ -416,6 +420,18 @@ export class Sim {
       if (ch.homeSpot && !this.spots.get(ch.homeSpot)) ch.homeSpot = null;
       this.assignHome(ch);
       this.interrupt(ch);
+      if (this.isCharacterOnLunch(ch, now)) {
+        const lunchSeat = this.pickLunchSeat(ch);
+        if (lunchSeat) {
+          this.snapTo(ch, lunchSeat);
+          ch.setPose('wait', 'lunch');
+        } else {
+          const tile = this.pickLunchFallbackTile(ch);
+          ch.placeAtTile(tile.x, tile.y);
+          ch.setPose('stand', 'lunch');
+        }
+        continue;
+      }
       const home = this.spots.get(ch.homeSpot);
       if (home) {
         this.snapTo(ch, home);
@@ -499,7 +515,11 @@ export class Sim {
     const prevStatus = ch.info.status;
     const hadShells = !!ch.info.shells?.length;
     const prevLook = lookSig(ch.info);
+    const wasPet = !!ch.info.pet;
     ch.info = a;
+    if (wasPet !== !!a.pet && this.lunchActive && !ch.leaving) {
+      this.interrupt(ch);
+    }
     if (lookSig(a) !== prevLook) {
       try {
         ch.appearance = this.art.appearanceFromSeed(a.seed, { look: a.look, sub: a.kind === 'sub', parts: a.parts });
@@ -536,7 +556,7 @@ export class Sim {
         ch.activityChangedAt = now;
         if (act.kind === 'done') ch.setIcon('check', 2600, now);
         if (act.kind === 'error') ch.setIcon('sweat', 2200, now);
-        if (act.kind === 'delegate' && ch.info.kind === 'main' && a.status === 'working') this.planDelegate(ch, now);
+        if (act.kind === 'delegate' && ch.info.kind === 'main' && a.status === 'working' && !this.isCharacterOnLunch(ch, now)) this.planDelegate(ch, now);
         // pedido atendido: moedinhas pelo trabalho
         if (act.kind === 'done' && ch.info.kind === 'main') this.social.turnDone(ch, now);
       }
@@ -545,7 +565,7 @@ export class Sim {
     const sd = latestShellDone(a);
     if (sd && sd.at > ch.shellDoneAt) {
       ch.shellDoneAt = sd.at;
-      this.reactShellDone(ch, !sd.error, now);
+      if (!this.isCharacterOnLunch(ch, now)) this.reactShellDone(ch, !sd.error, now);
     }
     // shells mudam sem mudar o status (ex.: comando em primeiro plano começou/terminou)
     if (prevStatus !== a.status || hadShells || !!a.shells?.length || ch.mode === 'shell' || this.forcedOffline.has(ch.id)) this.refreshMode(ch);
@@ -566,6 +586,8 @@ export class Sim {
     if (ch.gathering && (mode === 'idle' || mode === 'shell') && (prev === 'idle' || prev === 'shell')) return;
     // 正在宝可梦决斗场参赛或围观时，状态在 working/idle/wait 间切换不打断当前决斗，赛后自动按新状态回工位
     if (this.arena.isBusy(ch.id) && mode !== 'leave' && mode !== 'deliver') return;
+    // 午饭时间：小人保持在休息区/座位吃饭静坐，不被心跳状态切换打断
+    if (this.isCharacterOnLunch(ch, this.now) && mode !== 'leave' && mode !== 'deliver') return;
     // o trabalho chamou no meio de uma roda: avisa a turma antes de sair
     if (ch.gathering) this.social.calledAway(ch, prev, this.now);
     // comemoração/lamento do fim de um shell em andamento: termina (curta, volta à mesa) e o
@@ -701,6 +723,19 @@ export class Sim {
     const home = this.spots.get(ch.homeSpot);
     // primeiro passeio só depois de alguns segundos: a carga inicial mostra todos no lugar
     ch.nextOutingAt = now + INITIAL_OUTING_DELAY_MS + idleSitMs(ch.rng, this.options().liveliness) * ch.rng();
+    if (this.isCharacterOnLunch(ch, now)) {
+      const seat = this.pickLunchSeat(ch);
+      if (seat) {
+        this.snapTo(ch, seat);
+        ch.setPose('wait', 'lunch');
+        if (seat.id === ch.homeSpot) roomsSeated.add(ch.roomId);
+      } else {
+        const tile = this.pickLunchFallbackTile(ch);
+        ch.placeAtTile(tile.x, tile.y);
+        ch.setPose('stand', 'lunch');
+      }
+      return;
+    }
     const relaxing =
       ch.mode === 'idle' &&
       !!home &&
@@ -866,6 +901,7 @@ export class Sim {
     }
     for (const e of this.elevators) e.update(dt, now);
     this.updateRooms(now);
+    if (!this.visit) this.syncLunchState(now);
     this.social.update(now);
     if (!this.visit) this.arena.update(now);
     if (this.roomFx.active.size) this.roomFx.update(this, now);
@@ -1454,6 +1490,8 @@ export class Sim {
     ch.step = null;
     ch.thinkAt = 0;
     this.releaseTemp(ch);
+    ch.lunchSpot = null;
+    ch.lunchTile = null;
     // o passo 'do' que soltaria o interruptor foi descartado junto com a fila: sem isto a reserva
     // vaza e ninguém mais acende (ou apaga) a luz da sala enquanto este personagem existir
     const room = this.rooms.get(ch.roomId);
@@ -1480,6 +1518,11 @@ export class Sim {
     if (ch.mode === 'leave') return this.planLeave(ch, now);
     if (ch.mode === 'deliver') return this.planDeliver(ch, now);
     if (this.arena.isBusy(ch.id)) return false;
+    if (this.isCharacterOnLunch(ch, now)) {
+      const room = this.rooms.get(ch.roomId);
+      if (room && room.present) this.assignHome(ch);
+      return this.planLunch(ch, now);
+    }
     const room = this.rooms.get(ch.roomId);
     if (!room || !room.present) return this.planLobby(ch, room);
     this.assignHome(ch);
@@ -2005,8 +2048,170 @@ export class Sim {
     ch.queue.push({ t: 'do', fn: () => (ch.nextOutingAt = this.now + idleSitMs(ch.rng, this.options().liveliness)) });
   }
 
+  /** 午饭时间全局配置（北京时间 UTC+8），优先取 WorldOptions 再回退到 snapshot meta。 */
+  private lunchConfig(): { lunchEnabled: boolean; lunchStart: string; lunchEnd: string } {
+    const o = this.options();
+    const g = this.lastSnapshot?.meta?.officeSettings;
+    return {
+      lunchEnabled: o.lunchEnabled ?? g?.lunchEnabled ?? !this.visit,
+      lunchStart: o.lunchStart ?? g?.lunchStart ?? DEFAULT_LUNCH_START,
+      lunchEnd: o.lunchEnd ?? g?.lunchEnd ?? DEFAULT_LUNCH_END,
+    };
+  }
+
+  /** 当前是否处于午饭时间（访问他人大楼场景时不触发）。 */
+  isLunchTime(now = this.now): boolean {
+    return !this.visit && isBeijingLunchTime(now, this.lunchConfig());
+  }
+
+  /** 指定角色当前是否应去吃饭静坐（仅限人类角色，宝可梦和所有自带桌宠保持原活动）。 */
+  isCharacterOnLunch(ch: Character, now = this.now): boolean {
+    if (ch.info.pet) return false;
+    if (ch.leaving || ch.gone || ch.mode === 'leave' || ch.mode === 'deliver') return false;
+    return this.isLunchTime(now);
+  }
+
+  private syncLunchState(now: number): void {
+    const next = this.isLunchTime(now);
+    if (!this.lunchInitialized) {
+      this.lunchInitialized = true;
+      this.lunchActive = next;
+      return;
+    }
+    if (next === this.lunchActive) return;
+    this.lunchActive = next;
+    if (next) {
+      for (const ch of this.chars.values()) {
+        if (ch.info.pet || ch.leaving || ch.gone || ch.mode === 'leave' || ch.mode === 'deliver') continue;
+        ch.reactUntil = 0;
+        ch.thinkAt = 0;
+        this.interrupt(ch);
+      }
+      return;
+    }
+    for (const ch of this.chars.values()) {
+      if (ch.leaving || ch.gone) continue;
+      if (ch.lunchSpot || ch.lunchTile || !ch.info.pet) {
+        this.interrupt(ch);
+        ch.nextOutingAt = now + idleSitMs(ch.rng, this.options().liveliness);
+      }
+    }
+  }
+
+  private pickLunchSeat(ch: Character): SpotDef | null {
+    if (ch.lunchSpot) {
+      const cur = this.spots.get(ch.lunchSpot);
+      const validOwner = cur
+        ? cur.id === ch.homeSpot
+          ? this.spots.ownerOf(cur.id) === ch.id
+          : this.spots.isFree(cur.id, ch.id)
+        : false;
+      if (cur && cur.seated && validOwner && this.canUseSeat(ch, cur)) {
+        return cur;
+      }
+      if (cur && cur.id !== ch.homeSpot && this.spots.ownerOf(cur.id) === ch.id) {
+        this.spots.release(cur.id, ch.id);
+      }
+      ch.lunchSpot = null;
+    }
+
+    let seat: SpotDef | null =
+      this.randomFree(['cafe_seat', 'sofa', 'armchair', 'beanbag'], ch) ??
+      this.randomFree(['bench'], ch) ??
+      this.randomFree(['stool', 'nook'], ch);
+
+    if (!seat) {
+      const home = this.spots.get(ch.homeSpot);
+      if (home && home.seated && this.canUseSeat(ch, home)) {
+        seat = home;
+      } else {
+        for (const s of this.spots.all()) {
+          if (s.seated && this.spots.isFree(s.id, ch.id) && this.canUseSeat(ch, s)) {
+            seat = s;
+            break;
+          }
+        }
+      }
+    }
+    if (!seat) return null;
+    if (seat.id !== ch.homeSpot && this.spots.ownerOf(seat.id) !== ch.id) {
+      if (!this.reserveTemp(ch, seat)) return null;
+    }
+    ch.lunchSpot = seat.id;
+    ch.lunchTile = null;
+    return seat;
+  }
+
+  private pickLunchFallbackTile(ch: Character): { x: number; y: number } {
+    const grid = this.building.grid;
+    if (ch.lunchTile && grid.get(ch.lunchTile.x, ch.lunchTile.y) === FREE) {
+      return ch.lunchTile;
+    }
+    const busy = this.busyTiles(ch.id);
+    const loungeAreas = this.building.core.filter((a) => a.kind === 'lounge' || a.kind === 'cafe');
+    for (const area of loungeAreas) {
+      const r = area.rect;
+      for (let y = r.y + 2; y < r.y + r.h - 1; y++) {
+        for (let x = r.x + 1; x < r.x + r.w - 1; x++) {
+          if (grid.get(x, y) === FREE && !busy.has(y * grid.w + x)) {
+            ch.lunchTile = { x, y };
+            return ch.lunchTile;
+          }
+        }
+      }
+    }
+    const tile = this.lobbyTile(ch);
+    ch.lunchTile = tile;
+    return tile;
+  }
+
+  private planLunch(ch: Character, _now: number): boolean {
+    const seat = this.pickLunchSeat(ch);
+    if (seat) {
+      if (ch.atSpot === seat.id) {
+        ch.arriving = false;
+        return false;
+      }
+      const steps: Step[] = [];
+      this.pushLeave(ch, steps);
+      steps.push(
+        { t: 'go', tx: seat.tx, ty: seat.ty, held: 'lunch' },
+        { t: 'enter', spot: seat.id },
+        {
+          t: 'do',
+          fn: () => {
+            ch.arriving = false;
+            ch.setPose('wait', 'lunch');
+          },
+        },
+      );
+      ch.queue.push(...steps);
+      return true;
+    }
+    const tile = this.pickLunchFallbackTile(ch);
+    if (!ch.atSpot && ch.tx === tile.x && ch.ty === tile.y) {
+      ch.arriving = false;
+      return false;
+    }
+    const steps: Step[] = [];
+    this.pushLeave(ch, steps);
+    steps.push({ t: 'go', tx: tile.x, ty: tile.y, dir: 'down', held: 'lunch' });
+    ch.queue.push(...steps);
+    return true;
+  }
+
   /** Pose de descanso quando não há passos (na mesa: digitando, pedindo atenção, sentado ou cochilando). */
   private restPose(ch: Character, now: number): void {
+    if (this.isCharacterOnLunch(ch, now)) {
+      const spot = ch.atSpot ? this.spots.get(ch.atSpot) : undefined;
+      if (spot && spot.seated) {
+        ch.dir = spot.dir;
+        ch.setPose('wait', 'lunch');
+        return;
+      }
+      ch.setPose('stand', 'lunch');
+      return;
+    }
     const spot = ch.atSpot ? this.spots.get(ch.atSpot) : undefined;
     const atHome = !!spot && ch.atSpot === ch.homeSpot;
     if (!spot) {
@@ -2245,6 +2450,7 @@ export class Sim {
       room.lightAt = now - 10_000;
     }
     this.updateRooms(now);
+    if (!this.visit) this.syncLunchState(now);
     for (const e of this.elevators) e.reset();
     this.machineUntil.clear();
     this.social.reset(now);
@@ -2273,6 +2479,25 @@ export class Sim {
           continue;
         }
         this.assignHome(ch);
+        this.releaseTemp(ch);
+        ch.lunchSpot = null;
+        ch.lunchTile = null;
+        if (this.isCharacterOnLunch(ch, now)) {
+          const lunchSeat = this.pickLunchSeat(ch);
+          if (lunchSeat) {
+            this.snapTo(ch, lunchSeat);
+            ch.setPose('wait', 'lunch');
+            ch.standTile = null;
+          } else {
+            ch.atSpot = null;
+            ch.seated = false;
+            ch.sortY = null;
+            const tile = this.pickLunchFallbackTile(ch);
+            ch.placeAtTile(tile.x, tile.y);
+            ch.setPose('stand', 'lunch');
+          }
+          continue;
+        }
         const home = this.spots.get(ch.homeSpot);
         if (home) {
           this.snapTo(ch, home);
@@ -2283,7 +2508,6 @@ export class Sim {
           ch.sortY = null;
           this.placeOverflow(ch);
         }
-        this.releaseTemp(ch);
         ch.nextOutingAt = now + idleSitMs(ch.rng, this.options().liveliness);
       }
     }

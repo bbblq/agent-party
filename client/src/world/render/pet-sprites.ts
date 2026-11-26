@@ -2,6 +2,8 @@ import type { AgentPetInfo, CodexV2Spec, CodexV2StateSpec, PmdAnimSpec } from '.
 import type { Dir, Pose } from '../../art/api';
 import type { Mode } from '../sim/behavior';
 
+export type PetCombatPose = 'attack_melee' | 'attack_range' | 'charge' | 'hurt' | 'dodge' | 'faint';
+
 interface OpaqueBox {
   minX: number;
   maxX: number;
@@ -228,11 +230,42 @@ export function resolveCodexFrame(opts: {
   actualRows: number;
   actualCols: number;
   hasBackView?: boolean;
+  combatPose?: PetCombatPose;
 }): ResolvedCodexFrame {
   const row9 = opts.states['look_directions_1_8']?.row ?? 9;
   const row10 = opts.states['look_directions_9_16']?.row ?? 10;
   const hasGazeRows = (opts.hasBackView ?? true) && opts.actualRows > Math.max(row9, row10) && opts.actualCols >= 8;
   const t = Math.max(0, opts.animT);
+  const maxRow = Math.max(0, opts.actualRows - 1);
+  const maxCol = Math.max(0, opts.actualCols - 1);
+
+  if (opts.combatPose) {
+    if (opts.combatPose === 'hurt' || opts.combatPose === 'faint') {
+      const failSpec = opts.states.failed ?? DEFAULT_STATES.failed;
+      const row = Math.min(maxRow, Math.max(0, failSpec.row));
+      if (opts.combatPose === 'faint') {
+        const faintCol = Math.min(maxCol, Math.max(0, failSpec.columns - 1));
+        return { row, col: faintCol, flipX: false, offsetY: 2 };
+      }
+      const col = Math.min(maxCol, frameIndexForDurations(failSpec.columns, failSpec.frameDuration, t));
+      return { row, col, flipX: false, offsetY: 0 };
+    }
+    if (opts.combatPose === 'dodge' || opts.combatPose === 'attack_range' || opts.combatPose === 'charge') {
+      const key = opts.combatPose === 'charge' ? 'waving' : 'jumping';
+      const spec = opts.states[key] ?? DEFAULT_STATES[key];
+      const row = Math.min(maxRow, Math.max(0, spec.row));
+      const col = Math.min(maxCol, frameIndexForDurations(spec.columns, spec.frameDuration, t));
+      const offsetY = opts.combatPose === 'charge' ? -Math.abs(Math.sin((t / 320) * Math.PI)) * 2.5 : -1.5;
+      return { row, col, flipX: opts.dir === 'left', offsetY };
+    }
+    if (opts.combatPose === 'attack_melee') {
+      const runKey = opts.dir === 'left' ? 'running-left' : 'running-right';
+      const spec = opts.states[runKey] ?? DEFAULT_STATES[runKey] ?? opts.states.jumping ?? DEFAULT_STATES.jumping;
+      const row = Math.min(maxRow, Math.max(0, spec.row));
+      const col = Math.min(maxCol, frameIndexForDurations(spec.columns, spec.frameDuration, t));
+      return { row, col, flipX: false, offsetY: -Math.abs(Math.sin((t / 280) * Math.PI)) * 2 };
+    }
+  }
 
   if (hasGazeRows) {
     if (opts.dir === 'up') {
@@ -304,16 +337,58 @@ export function resolveCodexFrame(opts: {
 
   const key = stateKeyForPose(opts.pose, opts.dir, opts.mode, opts.lastHorizDir);
   const specState = opts.states[key] ?? DEFAULT_STATES[key] ?? opts.states.idle ?? DEFAULT_STATES.idle;
-  const maxRow = Math.max(0, opts.actualRows - 1);
-  const maxCol = Math.max(0, opts.actualCols - 1);
   const row = Math.min(maxRow, Math.max(0, specState.row));
   const col = Math.min(maxCol, frameIndexForDurations(specState.columns, specState.frameDuration, t));
   return { row, col, flipX: false, offsetY: 0 };
 }
 
-export function pmdAnimForPose(pmd: NonNullable<AgentPetInfo['pmd']>, pose: Pose, mode: Mode, dir: Dir = 'down'): PmdAnimSpec {
+export function warmUpPetCombatSprites(pet: AgentPetInfo | undefined): void {
+  if (!pet) return;
+  if (pet.kind === 'pmd' && pet.pmd) {
+    const sheets = [pet.pmd.idle, pet.pmd.walk, pet.pmd.attack, pet.pmd.shoot, pet.pmd.charge, pet.pmd.hurt, pet.pmd.faint];
+    for (const s of sheets) {
+      if (s) getOrLoad(s.url, s.frameWidth, s.frameHeight, false);
+    }
+    return;
+  }
+  const { fw, fh } = resolveSpec(pet.spec);
+  getOrLoad(pet.spriteUrl, fw, fh, true);
+}
+
+function pmdFrameIndexForCombat(frames: number, durations: number[], animT: number, clampEnd: boolean): number {
+  const count = Math.max(1, frames);
+  if (!clampEnd) return frameIndexForDurations(count, durations, animT);
+  if (!durations.length) return Math.min(count - 1, Math.floor(Math.max(0, animT) / 140));
+  let t = Math.max(0, animT);
+  for (let i = 0; i < count; i++) {
+    const d = Math.max(40, durations[i % durations.length] ?? 150);
+    if (t < d) return i;
+    t -= d;
+  }
+  return count - 1;
+}
+
+export function pmdAnimForPose(
+  pmd: NonNullable<AgentPetInfo['pmd']>,
+  pose: Pose,
+  mode: Mode,
+  dir: Dir = 'down',
+  combatPose?: PetCombatPose,
+): PmdAnimSpec {
   let anim: PmdAnimSpec;
-  if (pose === 'walk' || pose === 'run') anim = pmd.walk;
+  if (combatPose === 'attack_melee') {
+    anim = pmd.attack ?? pmd.work ?? pmd.shoot ?? pmd.hop ?? pmd.idle ?? pmd.walk;
+  } else if (combatPose === 'attack_range') {
+    anim = pmd.shoot ?? pmd.charge ?? pmd.attack ?? pmd.work ?? pmd.hop ?? pmd.idle ?? pmd.walk;
+  } else if (combatPose === 'charge') {
+    anim = pmd.charge ?? pmd.hop ?? pmd.shoot ?? pmd.idle ?? pmd.walk;
+  } else if (combatPose === 'hurt') {
+    anim = pmd.hurt ?? pmd.idle ?? pmd.walk;
+  } else if (combatPose === 'dodge') {
+    anim = pmd.hop ?? pmd.walk;
+  } else if (combatPose === 'faint') {
+    anim = pmd.faint ?? pmd.sleep ?? pmd.hurt ?? pmd.idle ?? pmd.walk;
+  } else if (pose === 'walk' || pose === 'run') anim = pmd.walk;
   else if (pose === 'type') anim = pmd.work ?? pmd.hop ?? pmd.idle ?? pmd.walk;
   else if (pose === 'sleep') anim = pmd.sleep ?? pmd.idle ?? pmd.walk;
   else if (pose === 'sulk') anim = pmd.hurt ?? pmd.idle ?? pmd.walk;
@@ -335,7 +410,7 @@ export function pmdAnimForPose(pmd: NonNullable<AgentPetInfo['pmd']>, pose: Pose
     anim = pmd.idle ?? pmd.walk;
   }
 
-  if (pose !== 'sleep' && dir !== 'down' && anim.rows < 5) {
+  if (!combatPose && pose !== 'sleep' && dir !== 'down' && anim.rows < 5) {
     const multi = [pmd.idle, pmd.hop, pmd.walk].find((candidate): candidate is PmdAnimSpec => !!candidate && candidate.rows >= 5);
     if (multi) return multi;
   }
@@ -363,29 +438,54 @@ export interface RenderedPetBox {
 function drawPmdPokemonFrame(
   ctx: CanvasRenderingContext2D,
   pmd: NonNullable<AgentPetInfo['pmd']>,
-  opts: { pose: Pose; dir: Dir; mode: Mode; animT: number },
+  opts: { pose: Pose; dir: Dir; mode: Mode; animT: number; combatPose?: PetCombatPose },
   x: number,
   y: number,
 ): RenderedPetBox | null {
-  const anim = pmdAnimForPose(pmd, opts.pose, opts.mode, opts.dir);
-  const entry = getOrLoad(anim.url, anim.frameWidth, anim.frameHeight, false);
+  const baseAnim = pmd.idle ?? pmd.walk;
+  const baseEntry = getOrLoad(baseAnim.url, baseAnim.frameWidth, baseAnim.frameHeight, false);
+
+  let anim = pmdAnimForPose(pmd, opts.pose, opts.mode, opts.dir, opts.combatPose);
+  let entry = anim.url === baseAnim.url ? baseEntry : getOrLoad(anim.url, anim.frameWidth, anim.frameHeight, false);
+
+  // If combat/pose sheet is still downloading, fall back to baseAnim so PMD never flickers into a human sprite
+  if ((!entry.loaded || entry.failed || !entry.box) && anim.url !== baseAnim.url) {
+    if (baseEntry.loaded && !baseEntry.failed && baseEntry.box) {
+      anim = baseAnim;
+      entry = baseEntry;
+    } else {
+      if (pmd.walk.url !== anim.url) getOrLoad(pmd.walk.url, pmd.walk.frameWidth, pmd.walk.frameHeight, false);
+      return null;
+    }
+  }
   if (!entry.loaded || entry.failed || !entry.box) {
-    // Warm up walk sheet too so movement doesn't flicker
     if (anim.url !== pmd.walk.url) getOrLoad(pmd.walk.url, pmd.walk.frameWidth, pmd.walk.frameHeight, false);
     return null;
   }
 
+  const refAnim = baseEntry.loaded && baseEntry.box ? baseAnim : anim;
+  const refBox = baseEntry.loaded && baseEntry.box ? baseEntry.box : entry.box;
+
   const maxCols = Math.max(1, Math.floor(entry.img.naturalWidth / anim.frameWidth));
   const maxRows = Math.max(1, Math.floor(entry.img.naturalHeight / anim.frameHeight));
-  const col = Math.min(maxCols - 1, frameIndexForDurations(anim.frames, anim.durations, opts.animT));
+  const clampEnd =
+    opts.combatPose === 'attack_melee' ||
+    opts.combatPose === 'attack_range' ||
+    opts.combatPose === 'charge' ||
+    opts.combatPose === 'faint';
+  const col = Math.min(maxCols - 1, pmdFrameIndexForCombat(anim.frames, anim.durations, opts.animT, clampEnd));
   const row = Math.min(maxRows - 1, pmdRowForDir(opts.dir, Math.min(anim.rows, maxRows)));
 
   const sx = col * anim.frameWidth;
   const sy = row * anim.frameHeight;
   const box = entry.box;
-  const scale = Math.max(0.75, Math.min(1.25, 26 / Math.max(1, box.h)));
-  const anchorX = (box.minX + box.maxX) / 2;
-  const anchorY = box.maxY;
+  const scale = Math.max(0.75, Math.min(1.25, 26 / Math.max(1, refBox.h)));
+
+  // PMD combat sheets pad transparently around frame center; keep baseAnim scale & ground foot baseline consistent
+  const sameAsRef = anim.url === refAnim.url;
+  const footFromCenterY = refBox.maxY - refAnim.frameHeight / 2;
+  const anchorX = sameAsRef ? (refBox.minX + refBox.maxX) / 2 : anim.frameWidth / 2;
+  const anchorY = sameAsRef ? refBox.maxY : anim.frameHeight / 2 + footFromCenterY;
 
   const dx = Math.round(x - anchorX * scale);
   const dy = Math.round(y - anchorY * scale);
@@ -397,10 +497,10 @@ function drawPmdPokemonFrame(
   ctx.drawImage(entry.img, sx, sy, anim.frameWidth, anim.frameHeight, dx, dy, dw, dh);
   ctx.imageSmoothingEnabled = prevSmooth;
 
-  const bx = dx + box.minX * scale;
-  const by = dy + box.minY * scale;
-  const bw = box.w * scale;
-  const bh = box.h * scale;
+  const bx = sameAsRef ? dx + box.minX * scale : x - (refBox.w * scale) / 2;
+  const by = sameAsRef ? dy + box.minY * scale : y - refBox.h * scale;
+  const bw = refBox.w * scale;
+  const bh = refBox.h * scale;
   return { bx, by, bw, bh, headY: by };
 }
 
@@ -411,7 +511,7 @@ function drawPmdPokemonFrame(
 export function drawCodexPetFrame(
   ctx: CanvasRenderingContext2D,
   pet: AgentPetInfo,
-  opts: { pose: Pose; dir: Dir; mode: Mode; animT: number; lastHorizDir: 'left' | 'right' },
+  opts: { pose: Pose; dir: Dir; mode: Mode; animT: number; lastHorizDir: 'left' | 'right'; combatPose?: PetCombatPose },
   x: number,
   y: number,
 ): RenderedPetBox | null {
@@ -437,6 +537,7 @@ export function drawCodexPetFrame(
     actualRows,
     actualCols,
     hasBackView: pet.hasBackView === true,
+    combatPose: opts.combatPose,
   });
 
   const sx = resolved.col * fw;

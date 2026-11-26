@@ -47,7 +47,7 @@ function compose(...layers: [BufSprite, number, number][]): PixelBuf {
 const POSES = Object.keys(POSE_FRAMES) as Pose[];
 const HELD: HeldItem[] = [
   'none', 'coffee', 'water', 'papers', 'laptop', 'book', 'box', 'paddle', 'popcorn',
-  'controller', 'rock', 'paper', 'scissors', 'phone', 'lipstick', 'comb',
+  'controller', 'rock', 'paper', 'scissors', 'phone', 'lipstick', 'comb', 'lunch',
 ];
 const SCREEN_MODES: ScreenMode[] = ['off', 'standby', 'idle', 'code', 'terminal', 'browser', 'search', 'chat', 'docs', 'tasks', 'alert', 'progress', 'show', 'game'];
 
@@ -188,10 +188,10 @@ describe("pose 'wait' (esperando o shell) e o balde de pipoca", () => {
     expect(isSeated('wait', false)).toBe(true);
   });
 
-  it('anima (os 2 quadros diferem) e é determinística em todas as direções, com e sem pipoca', () => {
+  it('anima (os 2 quadros diferem) e é determinística em todas as direções, com pipoca, marmita e sem item', () => {
     for (const a of cast) {
       for (const dir of DIRS) {
-        for (const held of ['popcorn', 'none'] as const) {
+        for (const held of ['popcorn', 'lunch', 'none'] as const) {
           const f0 = digest(wait(a, dir, 0, held).buf.data);
           const f1 = digest(wait(a, dir, 1, held).buf.data);
           expect(f0, `${dir}/${held}`).not.toBe(f1);
