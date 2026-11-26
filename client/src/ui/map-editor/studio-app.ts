@@ -1,7 +1,3 @@
-import '@fontsource/pixelify-sans/400.css';
-import '@fontsource/pixelify-sans/500.css';
-import '@fontsource/pixelify-sans/600.css';
-import '@fontsource/pixelify-sans/700.css';
 import * as artModule from '../../art';
 import type { ArtModule, Dir, FloorKind, FurnitureKind, WallPattern } from '../../art/api';
 import {
@@ -1027,18 +1023,18 @@ export class MapStudioApp {
         });
 
         const iconCanvas = document.createElement('canvas');
-        iconCanvas.width = 32;
-        iconCanvas.height = 32;
+        iconCanvas.width = 40;
+        iconCanvas.height = 40;
         const ictx = iconCanvas.getContext('2d')!;
         ictx.imageSmoothingEnabled = false;
         const fs = art.furnitureSprites(item.kindKey as FurnitureKind, item.variants[0], 0, { seed: 42 });
         if (fs?.base?.canvas) {
           const sp = fs.base.canvas;
-          const sc = Math.min(2, Math.max(0.75, 28 / Math.max(sp.width, sp.height)));
+          const sc = Math.min(2, Math.max(0.9, 34 / Math.max(sp.width, sp.height)));
           ictx.drawImage(
             sp,
-            Math.round((32 - sp.width * sc) / 2),
-            Math.round((32 - sp.height * sc) / 2),
+            Math.round((40 - sp.width * sc) / 2),
+            Math.round((40 - sp.height * sc) / 2),
             Math.round(sp.width * sc),
             Math.round(sp.height * sc),
           );
@@ -1069,15 +1065,15 @@ export class MapStudioApp {
     b.type = 'button';
     b.className = `ms-asset-thumb ${this.settings.tool === 'brush' && this.settings.brushMode === 'floor' && this.settings.floorKind === kind ? 'is-active' : ''}`;
     const c = document.createElement('canvas');
-    c.width = 32;
-    c.height = 32;
+    c.width = 40;
+    c.height = 40;
     const ctx = c.getContext('2d')!;
     ctx.imageSmoothingEnabled = false;
     try {
-      art.drawFloor(ctx, kind, 0, 0, 32, 32, { seed: 101 });
+      art.drawFloor(ctx, kind, 0, 0, 40, 40, { seed: 101 });
     } catch {
       ctx.fillStyle = '#556';
-      ctx.fillRect(0, 0, 32, 32);
+      ctx.fillRect(0, 0, 40, 40);
     }
     const label = document.createElement('span');
     label.textContent = name;
@@ -1555,16 +1551,17 @@ export class MapStudioApp {
     const head = document.createElement('div');
     head.className = 'ms-panel-head';
     head.innerHTML = `<span>🗂️ 图层与分组</span>`;
-    const actions = document.createElement('div');
-    actions.className = 'ms-layer-actions';
-    actions.append(
-      this.makeMiniBtn('+ 组', () => this.createEmptyGroup(), '', '新建空白图层分组'),
+    el.append(head);
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'ms-layer-toolbar';
+    toolbar.append(
+      this.makeMiniBtn('+ 新建组', () => this.createEmptyGroup(), '', '新建空白图层分组'),
       this.makeMiniBtn('编组', () => this.groupCurrentSelection(), '', '将当前选中项编为新组 (Ctrl+G)'),
       this.makeMiniBtn('📋 复制', () => this.copyCurrentToClipboard(), '', '复制选中元素或分组 (Ctrl+C)'),
       this.makeMiniBtn('📌 粘贴', () => this.enterPasteMode(), '', '将剪贴板内容以印章方式贴入当前地图 (Ctrl+V)'),
     );
-    head.append(actions);
-    el.append(head);
+    el.append(toolbar);
 
     const filterInput = document.createElement('input');
     filterInput.type = 'search';

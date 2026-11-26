@@ -144,7 +144,7 @@ interface DragState {
   };
 }
 
-const RULER_PX = 22;
+const RULER_PX = 26;
 
 export class StudioCanvas {
   readonly root: HTMLElement;
@@ -2044,16 +2044,16 @@ export class StudioCanvas {
     ctx.stroke();
 
     // Corner tile unit label
-    ctx.fillStyle = '#8b98b8';
-    ctx.font = 'bold 9px monospace';
-    ctx.fillText('格', 5, 14);
+    ctx.fillStyle = '#a3b1d1';
+    ctx.font = 'bold 11px system-ui, "Microsoft YaHei UI", sans-serif';
+    ctx.fillText('格', 6, 17);
 
     const stepTiles = this.zoom < 0.5 ? 16 : this.zoom < 1.1 ? 8 : 4;
     const minTx = Math.floor(this.camX / TILE / stepTiles) * stepTiles;
     const maxTx = Math.ceil((this.camX + (cw - RULER_PX) / this.zoom) / TILE);
-    ctx.fillStyle = '#9aa7c7';
+    ctx.fillStyle = '#aeb9d6';
     ctx.strokeStyle = '#475272';
-    ctx.font = '9px monospace';
+    ctx.font = '11px ui-monospace, Consolas, monospace';
     for (let t = minTx; t <= maxTx; t += stepTiles) {
       const sx = RULER_PX + (t * TILE - this.camX) * this.zoom;
       if (sx < RULER_PX || sx > cw) continue;
@@ -2061,7 +2061,7 @@ export class StudioCanvas {
       ctx.moveTo(sx, RULER_PX - 6);
       ctx.lineTo(sx, RULER_PX);
       ctx.stroke();
-      ctx.fillText(String(t), sx + 2, 12);
+      ctx.fillText(String(t), sx + 3, 14);
     }
 
     const minTy = Math.floor(this.camY / TILE / stepTiles) * stepTiles;
@@ -2073,7 +2073,7 @@ export class StudioCanvas {
       ctx.moveTo(RULER_PX - 6, sy);
       ctx.lineTo(RULER_PX, sy);
       ctx.stroke();
-      ctx.fillText(String(t), 2, sy + 9);
+      ctx.fillText(String(t), 2, sy + 11);
     }
 
     // Mouse hairline indicators on rulers

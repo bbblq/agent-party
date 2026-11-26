@@ -1,6 +1,3 @@
-import '@fontsource/pixelify-sans/400.css';
-import '@fontsource/pixelify-sans/600.css';
-import '@fontsource/pixelify-sans/700.css';
 import * as artModule from '../../art';
 import { TILE, type ArtModule, type FloorKind, type FurnitureKind, type WallPattern } from '../../art/api';
 import {
