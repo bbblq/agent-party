@@ -24,7 +24,6 @@ export type StudioToolId =
   | 'select'
   | 'marquee'
   | 'brush'
-  | 'bucket'
   | 'rect'
   | 'workstation'
   | 'stamp'
@@ -561,16 +560,7 @@ export class StudioCanvas {
       return;
     }
 
-    // 6. Bucket Fill
-    if (this.settings.tool === 'bucket') {
-      const next = this.floodFillFloor(doc, tx, ty);
-      if (next) {
-        this.cb.onDocCommit(next, `油漆桶填充 ${this.settings.floorKind}`);
-      }
-      return;
-    }
-
-    // 7. Continuous Brush
+    // 6. Continuous Brush
     if (this.settings.tool === 'brush') {
       if (this.settings.brushMode === 'doorway') {
         const toggled = this.toggleWallDoorway(doc, tx, ty);
@@ -1190,50 +1180,6 @@ export class StudioCanvas {
       doc.updatedAt = Date.now();
     }
     return { x: x0, y: y0, w: Math.max(1, w), h: Math.max(1, h) };
-  }
-
-  private floodFillFloor(doc: CustomMapDocument, sx: number, sy: number): CustomMapDocument | null {
-    if (sx < 0 || sy < 0 || sx >= doc.width || sy >= doc.height) return null;
-    const next = structuredClone(doc) as CustomMapDocument;
-    const buf = FloorGridBuffer.fromDocument(next);
-    const targetIdx = buf.getIndex(sx, sy);
-    const newIdx = buf.ensurePaletteIndex({
-      kind: this.settings.floorKind,
-      ...(this.settings.floorTint ? { tint: this.settings.floorTint } : {}),
-    });
-    if (targetIdx === newIdx) return null;
-
-    const w = next.width;
-    const h = next.height;
-    const visited = new Uint8Array(w * h);
-    const queue = new Int32Array(w * h);
-    let head = 0;
-    let tail = 0;
-    queue[tail++] = sy * w + sx;
-    visited[sy * w + sx] = 1;
-
-    while (head < tail) {
-      const idx = queue[head++];
-      buf.data[idx] = newIdx;
-      const x = idx % w;
-      const y = Math.floor(idx / w);
-      const tryPush = (nx: number, ny: number) => {
-        if (nx < 0 || ny < 0 || nx >= w || ny >= h) return;
-        const ni = ny * w + nx;
-        if (visited[ni] || buf.data[ni] !== targetIdx) return;
-        visited[ni] = 1;
-        queue[tail++] = ni;
-      };
-      tryPush(x + 1, y);
-      tryPush(x - 1, y);
-      tryPush(x, y + 1);
-      tryPush(x, y - 1);
-    }
-
-    next.floorPalette = buf.palette;
-    next.floorRows = buf.toRows();
-    next.updatedAt = Date.now();
-    return next;
   }
 
   private eraseAt(doc: CustomMapDocument, tx: number, ty: number): { x: number; y: number; w: number; h: number } {

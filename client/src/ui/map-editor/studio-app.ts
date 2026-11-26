@@ -73,7 +73,6 @@ const TOOL_DEFS: Array<{ id: StudioToolId; key: string; icon: string; name: stri
   { id: 'select', key: 'V', icon: '🖱️', name: '移动 / 选择' },
   { id: 'marquee', key: 'M', icon: '⬚', name: '矩形选框 (支持跨地图复制)' },
   { id: 'brush', key: 'B', icon: '🖌️', name: '连续画笔 (地面/墙体/开门)' },
-  { id: 'bucket', key: 'G', icon: '🪣', name: '油漆桶 (区域填色)' },
   { id: 'rect', key: 'R', icon: '🧱', name: '矩形建房 / 区域 / 地毯' },
   { id: 'workstation', key: 'K', icon: '💻', name: '工位组合印章' },
   { id: 'stamp', key: 'P', icon: '🪑', name: '家具 / 墙饰印章' },
@@ -852,8 +851,6 @@ export class MapStudioApp {
           });
         }
       }
-    } else if (t === 'bucket') {
-      addBadge(`🪣 油漆桶填充 · 当前材质: ${this.settings.floorKind} · 点击连续同色地面区域直接铺满`);
     } else if (t === 'rect') {
       addBadge('🧱 矩形快速生成');
       for (const [k, l] of [['room', '完整房间(墙+门+地)'], ['floor', '地面矩形'], ['rug', '地毯'], ['zone', '逻辑区域框']] as const) {
@@ -2701,7 +2698,6 @@ export class MapStudioApp {
         v: 'select',
         m: 'marquee',
         b: 'brush',
-        g: 'bucket',
         r: 'rect',
         k: 'workstation',
         p: 'stamp',
