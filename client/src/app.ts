@@ -22,12 +22,12 @@ export function start(): void {
 
   const params = new URLSearchParams(location.search);
   const path = location.pathname.replace(/\/+$/, '') || '/';
-  if (path === '/map' || path === '/map/assets' || params.get('studio') === '1') {
-    void import('./ui/map-editor/studio-app').then((m) =>
-      m.startMapStudio({
-        initialView: path === '/map/assets' || params.get('view') === 'catalog' ? 'catalog' : 'canvas',
-      }),
-    );
+  if (path === '/map/assets' || params.get('view') === 'catalog') {
+    void import('./ui/map-editor/asset-catalog-view').then((m) => m.startAssetCatalogPage());
+    return;
+  }
+  if (path === '/map' || params.get('studio') === '1') {
+    void import('./ui/map-editor/studio-app').then((m) => m.startMapStudio());
     return;
   }
 

@@ -1,14 +1,29 @@
+import '@fontsource/pixelify-sans/400.css';
+import '@fontsource/pixelify-sans/600.css';
+import '@fontsource/pixelify-sans/700.css';
 import * as artModule from '../../art';
 import { TILE, type ArtModule, type FloorKind, type FurnitureKind, type WallPattern } from '../../art/api';
 import {
   FULL_ASSET_CATALOG,
-  WALL_PATTERNS,
   type AssetCatalogEntry,
   type AssetPassability,
   type SpriteRot,
 } from '../../../../shared/map';
 import { drawArenaFloor } from '../../world/render/arena-render';
 import { copyTextSafe } from './clipboard-http-utils';
+import './map-editor.css';
+
+export const ASSET_PICK_CHANNEL = 'agent_party_studio_pick';
+export const ASSET_PICK_STORAGE_KEY = 'agent_party_studio_pick_v1';
+
+export interface BroadcastAssetPick {
+  id: string;
+  variant?: string;
+  rot?: SpriteRot;
+  flipX?: boolean;
+  flipY?: boolean;
+  ts: number;
+}
 
 const art: ArtModule = artModule;
 
@@ -71,13 +86,18 @@ export class AssetCatalogView {
       </div>
     `;
 
-    const backBtn = document.createElement('button');
-    backBtn.type = 'button';
-    backBtn.className = 'ms-btn ms-btn--primary';
-    backBtn.textContent = '🎨 返回地图画布编辑';
-    backBtn.onclick = () => this.callbacks.onBackToCanvas();
+    const backLink = document.createElement('a');
+    backLink.className = 'ms-btn ms-btn--primary';
+    backLink.href = '/map';
+    backLink.textContent = '🎨 前往地图工坊画布';
+    backLink.onclick = (ev) => {
+      if (this.callbacks.onBackToCanvas) {
+        ev.preventDefault();
+        this.callbacks.onBackToCanvas();
+      }
+    };
 
-    top.append(titleWrap, backBtn);
+    top.append(titleWrap, backLink);
 
     const filters = document.createElement('div');
     filters.className = 'ms-catalog-filters';
@@ -463,4 +483,83 @@ export class AssetCatalogView {
     this.previewCache.set(key, url);
     return url;
   }
+}
+
+/**
+ * Mount the Asset Encyclopedia as a dedicated full-screen page on `/map/assets`.
+ * Clicking any asset's pick button syncs to open `/map` tabs via BroadcastChannel/localStorage
+ * or opens `/map?pick=<id>` directly if visited standalone.
+ */
+export function startAssetCatalogPage(): void {
+  document.title = 'Agent Party — 全素材图鉴百科';
+  document.body.classList.add('ms-catalog-standalone-body');
+  const worldCanvas = document.getElementById('world');
+  if (worldCanvas) worldCanvas.style.display = 'none';
+  const root = document.getElementById('ui') ?? document.body;
+  root.className = 'ms-catalog-page-root';
+  root.innerHTML = '';
+
+  const toastEl = document.createElement('div');
+  toastEl.className = 'ms-toast';
+  toastEl.hidden = true;
+  let toastTimer = 0;
+  const toast = (msg: string) => {
+    toastEl.textContent = msg;
+    toastEl.hidden = false;
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => {
+      toastEl.hidden = true;
+    }, 3400);
+  };
+
+  let bc: BroadcastChannel | null = null;
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      bc = new BroadcastChannel(ASSET_PICK_CHANNEL);
+    }
+  } catch {
+    bc = null;
+  }
+
+  const view = new AssetCatalogView({
+    onPick: (pick) => {
+      const payload: BroadcastAssetPick = {
+        id: pick.entry.id,
+        ...(pick.variant ? { variant: pick.variant } : {}),
+        ...(pick.rot ? { rot: pick.rot } : {}),
+        ...(pick.flipX ? { flipX: true } : {}),
+        ...(pick.flipY ? { flipY: true } : {}),
+        ts: Date.now(),
+      };
+      bc?.postMessage(payload);
+      try {
+        localStorage.setItem(ASSET_PICK_STORAGE_KEY, JSON.stringify(payload));
+      } catch {
+        // ignore quota errors
+      }
+      if (window.opener && !window.opener.closed) {
+        toast(`✅ 已同步素材「${pick.entry.name}」到地图工坊标签页，切换回去即可直接放置！`);
+        try {
+          window.opener.focus();
+        } catch {
+          // ignore cross-window focus block
+        }
+      } else {
+        const q = new URLSearchParams({ pick: pick.entry.id });
+        if (pick.variant) q.set('variant', pick.variant);
+        location.href = `/map?${q.toString()}`;
+      }
+    },
+    onBackToCanvas: () => {
+      if (window.opener && !window.opener.closed) {
+        window.close();
+      } else {
+        location.href = '/map';
+      }
+    },
+    onToast: toast,
+  });
+
+  view.show();
+  root.append(view.el, toastEl);
 }

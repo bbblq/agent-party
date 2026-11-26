@@ -24,7 +24,7 @@ export function drawArenaFloor(
   const oy = rect.y * TILE;
   const T = (n: number) => Math.round(n * TILE);
 
-  const active = state.phase === 'fight';
+  const active = state?.phase === 'fight';
   const pulse = active ? 0.55 + Math.sin(now / 180) * 0.25 : 0.28;
 
   ctx.save();

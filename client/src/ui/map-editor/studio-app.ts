@@ -32,7 +32,11 @@ import {
   type StudioTaskSummary,
   type TransformOp,
 } from '../../../../shared/map';
-import { AssetCatalogView, type AssetPickSelection } from './asset-catalog-view';
+import {
+  ASSET_PICK_CHANNEL,
+  ASSET_PICK_STORAGE_KEY,
+  type BroadcastAssetPick,
+} from './asset-catalog-view';
 import { CanvasSettingsModal, type ResizeAnchor } from './canvas-settings-modal';
 import {
   copyTextSafe,
@@ -132,15 +136,18 @@ export class MapStudioApp {
     eraserMode: 'items',
     showGrid: false,
     showWalkability: false,
-    showZones: true,
+    showZones: false,
   };
 
   private canvasEngine!: StudioCanvas;
-  private catalogView!: AssetCatalogView;
   private mcpModal = new McpModal();
   private settingsModal = new CanvasSettingsModal();
   private publishModalEl!: HTMLElement;
   private ioModalEl!: HTMLElement;
+
+  // Collapsible workspace panels for maximum canvas room
+  private leftCollapsed = false;
+  private rightCollapsed = false;
 
   // Layout containers
   private tabsBarEl!: HTMLElement;
@@ -152,7 +159,10 @@ export class MapStudioApp {
   private aiBarEl!: HTMLElement;
   private inspectorEl!: HTMLElement;
   private layersEl!: HTMLElement;
-  private statusEl!: HTMLElement;
+  private statusLeftEl!: HTMLElement;
+  private statusRightEl!: HTMLElement;
+  private expandLeftBtn!: HTMLButtonElement;
+  private expandRightBtn!: HTMLButtonElement;
   private toastEl!: HTMLElement;
   private workspaceEl!: HTMLElement;
   private refFileInput!: HTMLInputElement;
@@ -160,7 +170,8 @@ export class MapStudioApp {
   private paletteTab: 'floors' | 'walls' | 'work' | 'decor' | 'rest' = 'work';
   private toastTimer = 0;
 
-  constructor(private readonly opts: { initialView: 'canvas' | 'catalog' }) {
+  constructor(_opts: { initialView?: 'canvas' | 'catalog' } = {}) {
+    document.title = 'Agent Party — 地图工坊';
     document.body.classList.add('ms-studio-body');
     const existingCanvas = document.getElementById('world');
     if (existingCanvas) existingCanvas.style.display = 'none';
@@ -172,17 +183,14 @@ export class MapStudioApp {
     this.loadInitialTabs();
     this.buildLayout();
     this.bindGlobalKeys();
+    this.bindExternalAssetPickers();
 
     onMapClipboardChange((next) => {
       this.pasteClip = next;
       this.renderOptionsBar();
     });
 
-    if (opts.initialView === 'catalog') {
-      this.openCatalogView(false);
-    } else {
-      requestAnimationFrame(() => this.canvasEngine.fitToMap());
-    }
+    requestAnimationFrame(() => this.canvasEngine.fitToMap());
 
     // Quietly resume MCP session ONLY if user previously created one in localStorage
     const savedToken = localStorage.getItem(STUDIO_TOKEN_STORAGE_KEY);
@@ -406,14 +414,42 @@ export class MapStudioApp {
 
     this.aiBarEl = document.createElement('div');
     this.aiBarEl.className = 'ms-ai-dock';
+    this.aiBarEl.hidden = true;
 
-    this.statusEl = document.createElement('footer');
-    this.statusEl.className = 'ms-status-bar';
+    this.statusLeftEl = document.createElement('div');
+    this.statusLeftEl.className = 'ms-float-status-left';
+
+    this.statusRightEl = document.createElement('div');
+    this.statusRightEl.className = 'ms-float-status-right';
+
+    this.expandLeftBtn = document.createElement('button');
+    this.expandLeftBtn.type = 'button';
+    this.expandLeftBtn.className = 'ms-btn ms-btn--xs ms-expand-pill is-left';
+    this.expandLeftBtn.textContent = '▶ 素材';
+    this.expandLeftBtn.title = '展开左侧素材面板 (Tab)';
+    this.expandLeftBtn.hidden = true;
+    this.expandLeftBtn.onclick = () => this.toggleLeftPanel(false);
+
+    this.expandRightBtn = document.createElement('button');
+    this.expandRightBtn.type = 'button';
+    this.expandRightBtn.className = 'ms-btn ms-btn--xs ms-expand-pill is-right';
+    this.expandRightBtn.textContent = '◀ 属性/图层';
+    this.expandRightBtn.title = '展开右侧属性与图层面板 (Tab)';
+    this.expandRightBtn.hidden = true;
+    this.expandRightBtn.onclick = () => this.toggleRightPanel(false);
 
     const canvasWrap = document.createElement('div');
     canvasWrap.className = 'ms-canvas-wrap';
-    canvasWrap.append(this.refHudEl, this.canvasEngine.root);
-    centerArea.append(canvasWrap, this.aiBarEl, this.statusEl);
+    canvasWrap.append(
+      this.refHudEl,
+      this.expandLeftBtn,
+      this.expandRightBtn,
+      this.canvasEngine.root,
+      this.aiBarEl,
+      this.statusLeftEl,
+      this.statusRightEl,
+    );
+    centerArea.append(canvasWrap);
 
     // Right: Inspector (top, pure element/group only!) + Layers & Groups (bottom)
     const rightArea = document.createElement('aside');
@@ -425,13 +461,6 @@ export class MapStudioApp {
     rightArea.append(this.inspectorEl, this.layersEl);
 
     this.workspaceEl.append(leftArea, centerArea, rightArea);
-
-    // 4. Full Asset Catalog View
-    this.catalogView = new AssetCatalogView({
-      onPick: (pick) => this.applyCatalogPick(pick),
-      onBackToCanvas: () => this.closeCatalogView(),
-      onToast: (m) => this.toast(m),
-    });
 
     // 5. Hidden file inputs + Toast + Modals
     this.refFileInput = document.createElement('input');
@@ -479,7 +508,6 @@ export class MapStudioApp {
       topBar,
       this.optionsBarEl,
       this.workspaceEl,
-      this.catalogView.el,
       this.mcpModal.el,
       this.settingsModal.el,
       this.publishModalEl,
@@ -562,9 +590,17 @@ export class MapStudioApp {
         ? '🟢 MCP 已连'
         : '🤖 MCP 协同';
 
+    const catalogLink = document.createElement('a');
+    catalogLink.className = 'ms-btn ms-btn--sm ms-btn--cyan';
+    catalogLink.href = '/map/assets';
+    catalogLink.target = '_blank';
+    catalogLink.rel = 'noopener noreferrer';
+    catalogLink.title = '在独立页面打开完整素材图鉴百科 (/map/assets)';
+    catalogLink.textContent = '📖 素材百科 ↗';
+
     this.headerActionsEl.append(
       mk(`📐 画布 ${this.doc.width}×${this.doc.height}`, '', '画布尺寸、名称、背景与可玩性体检', () => this.openCanvasSettings()),
-      mk('📖 素材百科', 'ms-btn--cyan', '查看全部素材 ID、通行性、互动机制与旋转方式 (/map/assets)', () => this.openCatalogView(true)),
+      catalogLink,
       mk('🖼️ 导入参考图', '', '导入本地平面图进行自由拖拽缩放定位与临摹', () => this.refFileInput.click()),
       mk(mcpLabel, this.presence.connected ? 'ms-btn--green' : '', '打开 MCP AI 协同中心、启动提示词与内网手动复制区', () => {
         void this.openMcpModal();
@@ -630,29 +666,44 @@ export class MapStudioApp {
     this.toast('🏠 已新建 32×24 小房间草稿：画好后框选按 Ctrl+C，切回主图即可跨地图粘贴！');
   }
 
-  // ------------------------------------------------------------------ Views (/map vs /map/assets)
+  // ------------------------------------------------------------------ Standalone Catalog Cross-Tab Sync & Collapsible Panels
 
-  private openCatalogView(pushUrl: boolean): void {
-    this.workspaceEl.hidden = true;
-    this.optionsBarEl.hidden = true;
-    this.catalogView.show();
-    if (pushUrl && location.pathname !== '/map/assets') {
-      history.pushState(null, '', '/map/assets');
+  private bindExternalAssetPickers(): void {
+    const apply = (pick: Partial<BroadcastAssetPick> | null | undefined) => {
+      if (!pick?.id) return;
+      this.applyExternalAssetPick(pick as BroadcastAssetPick);
+    };
+
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        const bc = new BroadcastChannel(ASSET_PICK_CHANNEL);
+        bc.onmessage = (ev) => apply(ev.data as BroadcastAssetPick);
+      }
+    } catch {
+      // ignore unsupported BroadcastChannel
+    }
+
+    window.addEventListener('storage', (ev) => {
+      if (ev.key === ASSET_PICK_STORAGE_KEY && ev.newValue) {
+        try {
+          apply(JSON.parse(ev.newValue) as BroadcastAssetPick);
+        } catch {
+          // ignore
+        }
+      }
+    });
+
+    const params = new URLSearchParams(location.search);
+    const pickId = params.get('pick');
+    if (pickId) {
+      apply({ id: pickId, variant: params.get('variant') || undefined, ts: Date.now() });
+      history.replaceState(null, '', '/map');
     }
   }
 
-  private closeCatalogView(): void {
-    this.catalogView.hide();
-    this.workspaceEl.hidden = false;
-    this.optionsBarEl.hidden = false;
-    if (location.pathname !== '/map') {
-      history.pushState(null, '', '/map');
-    }
-    this.canvasEngine.requestRender();
-  }
-
-  private applyCatalogPick(pick: AssetPickSelection): void {
-    const e = pick.entry;
+  private applyExternalAssetPick(pick: BroadcastAssetPick): void {
+    const e = FULL_ASSET_CATALOG.find((x) => x.id === pick.id);
+    if (!e) return;
     if (e.section === 'floor') {
       this.settings.floorKind = e.kindKey as FloorKind;
       this.settings.brushMode = 'floor';
@@ -678,8 +729,23 @@ export class MapStudioApp {
       this.settings.stampFlipY = !!pick.flipY;
       this.setTool('stamp');
     }
-    this.closeCatalogView();
-    this.toast(`🎨 已选用素材：${e.name} (${e.id})`);
+    this.renderPaletteDock();
+    this.toast(`🎨 已从百科选用：${e.name} (${e.id})`);
+  }
+
+  private toggleLeftPanel(collapsed = !this.leftCollapsed): void {
+    this.leftCollapsed = collapsed;
+    this.workspaceEl.classList.toggle('is-left-collapsed', collapsed);
+    this.paletteDockEl.hidden = collapsed;
+    this.expandLeftBtn.hidden = !collapsed;
+    requestAnimationFrame(() => this.canvasEngine.requestRender());
+  }
+
+  private toggleRightPanel(collapsed = !this.rightCollapsed): void {
+    this.rightCollapsed = collapsed;
+    this.workspaceEl.classList.toggle('is-right-collapsed', collapsed);
+    this.expandRightBtn.hidden = !collapsed;
+    requestAnimationFrame(() => this.canvasEngine.requestRender());
   }
 
   // ------------------------------------------------------------------ Tools & Options Strip
@@ -688,6 +754,7 @@ export class MapStudioApp {
     this.settings.tool = tool;
     this.renderLeftTools();
     this.renderOptionsBar();
+    this.renderAiDock();
     this.canvasEngine.requestRender();
     this.renderStatusBar();
   }
@@ -878,13 +945,24 @@ export class MapStudioApp {
 
     const head = document.createElement('div');
     head.className = 'ms-dock-head';
-    head.innerHTML = `<span>素材面板 (可拖入)</span>`;
-    const moreBtn = document.createElement('button');
-    moreBtn.type = 'button';
-    moreBtn.className = 'ms-btn ms-btn--xs';
-    moreBtn.textContent = '百科 ↗';
-    moreBtn.onclick = () => this.openCatalogView(true);
-    head.append(moreBtn);
+    head.innerHTML = `<span>素材库 (点击/拖入)</span>`;
+    const headBtns = document.createElement('div');
+    headBtns.className = 'ms-dock-head__btns';
+    const moreLink = document.createElement('a');
+    moreLink.className = 'ms-btn ms-btn--xs';
+    moreLink.href = '/map/assets';
+    moreLink.target = '_blank';
+    moreLink.rel = 'noopener noreferrer';
+    moreLink.title = '独立页面查看完整图鉴百科';
+    moreLink.textContent = '百科';
+    const hideBtn = document.createElement('button');
+    hideBtn.type = 'button';
+    hideBtn.className = 'ms-btn ms-btn--xs';
+    hideBtn.textContent = '◀';
+    hideBtn.title = '收起左侧素材面板 (Tab)';
+    hideBtn.onclick = () => this.toggleLeftPanel(true);
+    headBtns.append(moreLink, hideBtn);
+    head.append(headBtns);
     el.append(head);
 
     const tabs = document.createElement('div');
@@ -949,18 +1027,18 @@ export class MapStudioApp {
         });
 
         const iconCanvas = document.createElement('canvas');
-        iconCanvas.width = 40;
-        iconCanvas.height = 40;
+        iconCanvas.width = 32;
+        iconCanvas.height = 32;
         const ictx = iconCanvas.getContext('2d')!;
         ictx.imageSmoothingEnabled = false;
         const fs = art.furnitureSprites(item.kindKey as FurnitureKind, item.variants[0], 0, { seed: 42 });
         if (fs?.base?.canvas) {
           const sp = fs.base.canvas;
-          const sc = Math.min(2, Math.max(1, 34 / Math.max(sp.width, sp.height)));
+          const sc = Math.min(2, Math.max(0.75, 28 / Math.max(sp.width, sp.height)));
           ictx.drawImage(
             sp,
-            Math.round((40 - sp.width * sc) / 2),
-            Math.round((40 - sp.height * sc) / 2),
+            Math.round((32 - sp.width * sc) / 2),
+            Math.round((32 - sp.height * sc) / 2),
             Math.round(sp.width * sc),
             Math.round(sp.height * sc),
           );
@@ -991,15 +1069,15 @@ export class MapStudioApp {
     b.type = 'button';
     b.className = `ms-asset-thumb ${this.settings.tool === 'brush' && this.settings.brushMode === 'floor' && this.settings.floorKind === kind ? 'is-active' : ''}`;
     const c = document.createElement('canvas');
-    c.width = 36;
-    c.height = 36;
+    c.width = 32;
+    c.height = 32;
     const ctx = c.getContext('2d')!;
     ctx.imageSmoothingEnabled = false;
     try {
-      art.drawFloor(ctx, kind, 0, 0, 36, 36, { seed: 101 });
+      art.drawFloor(ctx, kind, 0, 0, 32, 32, { seed: 101 });
     } catch {
       ctx.fillStyle = '#556';
-      ctx.fillRect(0, 0, 36, 36);
+      ctx.fillRect(0, 0, 32, 32);
     }
     const label = document.createElement('span');
     label.textContent = name;
@@ -1176,7 +1254,9 @@ export class MapStudioApp {
 
     const head = document.createElement('div');
     head.className = 'ms-panel-head';
-    head.innerHTML = `<span>🔍 元素 / 分组属性检查器</span>`;
+    head.innerHTML = `<span>🔍 属性检查器</span>`;
+    const collapseBtn = this.makeMiniBtn('收起 ▶', () => this.toggleRightPanel(true), '', '收起右侧属性与图层面板 (Tab)');
+    head.append(collapseBtn);
     el.append(head);
 
     const body = document.createElement('div');
@@ -1970,6 +2050,10 @@ export class MapStudioApp {
     const el = this.aiBarEl;
     el.innerHTML = '';
     const tab = this.activeTab;
+    const reviewTask = this.tasks.find((t) => t.status === 'review');
+    const shouldShow = this.settings.tool === 'ai_box' || tab.aiBoxes.length > 0 || !!reviewTask;
+    el.hidden = !shouldShow;
+    if (!shouldShow) return;
 
     const top = document.createElement('div');
     top.className = 'ms-ai-dock__top';
@@ -2055,8 +2139,6 @@ export class MapStudioApp {
       el.append(strip);
     }
 
-    // Show pending AI task review banner if an MCP task completed
-    const reviewTask = this.tasks.find((t) => t.status === 'review');
     if (reviewTask) {
       const revBar = document.createElement('div');
       revBar.className = 'ms-ai-review-bar';
@@ -2072,29 +2154,23 @@ export class MapStudioApp {
   // ------------------------------------------------------------------ Status Bar
 
   private renderStatusCoord(tx: number, ty: number, inBounds: boolean): void {
-    const coordEl = this.statusEl.querySelector('[data-slot="coord"]');
+    const coordEl = this.statusLeftEl.querySelector('[data-slot="coord"]');
     if (coordEl) {
-      coordEl.textContent = inBounds ? `坐标: X=${tx}, Y=${ty}` : `坐标: (${tx}, ${ty}) 越界`;
+      coordEl.textContent = inBounds ? `X=${tx}, Y=${ty}` : `(${tx}, ${ty}) 越界`;
     }
   }
 
-  private renderStatusBar(hint?: string): void {
-    const el = this.statusEl;
-    el.innerHTML = '';
-
-    const left = document.createElement('div');
-    left.className = 'ms-status-left';
+  private renderStatusBar(_hint?: string): void {
+    this.statusLeftEl.innerHTML = '';
     const coord = document.createElement('span');
     coord.dataset.slot = 'coord';
-    coord.textContent = '坐标: X=0, Y=0';
-    const mode = document.createElement('span');
-    mode.className = 'ms-status-mode';
-    mode.textContent = hint || `纯本地零延迟模式 · ${this.doc.name} (${this.doc.width}×${this.doc.height})`;
-    left.append(coord, mode);
+    coord.textContent = 'X=0, Y=0';
+    const dim = document.createElement('span');
+    dim.className = 'ms-status-mode';
+    dim.textContent = `${this.doc.width}×${this.doc.height}`;
+    this.statusLeftEl.append(coord, dim);
 
-    const right = document.createElement('div');
-    right.className = 'ms-status-right';
-
+    this.statusRightEl.innerHTML = '';
     const mkToggle = (label: string, active: boolean, fn: () => void) => {
       const b = document.createElement('button');
       b.type = 'button';
@@ -2104,13 +2180,17 @@ export class MapStudioApp {
       return b;
     };
 
-    right.append(
+    const zoomTxt = document.createElement('span');
+    zoomTxt.className = 'ms-zoom-label';
+    zoomTxt.textContent = `${Math.round(this.canvasEngine.getZoom() * 100)}%`;
+
+    this.statusRightEl.append(
       mkToggle('# 网格', this.settings.showGrid, () => {
         this.settings.showGrid = !this.settings.showGrid;
         this.canvasEngine.requestRender();
         this.renderStatusBar();
       }),
-      mkToggle('🚦 通行热区', this.settings.showWalkability, () => {
+      mkToggle('🚦 热区', this.settings.showWalkability, () => {
         this.settings.showWalkability = !this.settings.showWalkability;
         this.canvasEngine.requestRender();
         this.renderStatusBar();
@@ -2120,19 +2200,11 @@ export class MapStudioApp {
         this.canvasEngine.requestRender();
         this.renderStatusBar();
       }),
-      mkToggle('🔍 适屏全览', false, () => this.canvasEngine.fitToMap()),
+      mkToggle('适屏', false, () => this.canvasEngine.fitToMap()),
       mkToggle('−', false, () => this.canvasEngine.setZoom(this.canvasEngine.getZoom() / 1.25)),
-    );
-
-    const zoomTxt = document.createElement('span');
-    zoomTxt.className = 'ms-zoom-label';
-    zoomTxt.textContent = `${Math.round(this.canvasEngine.getZoom() * 100)}%`;
-    right.append(
       zoomTxt,
       mkToggle('+', false, () => this.canvasEngine.setZoom(this.canvasEngine.getZoom() * 1.25)),
     );
-
-    el.append(left, right);
   }
 
   // ------------------------------------------------------------------ Modals (Canvas Settings, I/O, MCP, Admin Publish)
@@ -2543,17 +2615,19 @@ export class MapStudioApp {
   // ------------------------------------------------------------------ Keyboard Shortcuts
 
   private bindGlobalKeys(): void {
-    window.addEventListener('popstate', () => {
-      const p = location.pathname.replace(/\/+$/, '');
-      if (p === '/map/assets') this.openCatalogView(false);
-      else this.closeCatalogView();
-    });
-
     window.addEventListener('keydown', (ev) => {
       const t = ev.target as HTMLElement | null;
       const typing =
         t && (t.isContentEditable || t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement);
       if (typing) return;
+
+      if (ev.key === 'Tab') {
+        ev.preventDefault();
+        const bothCollapsed = this.leftCollapsed && this.rightCollapsed;
+        this.toggleLeftPanel(!bothCollapsed);
+        this.toggleRightPanel(!bothCollapsed);
+        return;
+      }
 
       const mod = ev.ctrlKey || ev.metaKey;
       if (mod && ev.key.toLowerCase() === 'z') {

@@ -160,6 +160,7 @@ export class StudioCanvas {
   private camY = -48;
   private zoom = 1.6;
   private spaceHeld = false;
+  private pointerInside = false;
   private drag: DragState | null = null;
   private hoverTile = { tx: 0, ty: 0, inBounds: false };
   private rafPending = false;
@@ -364,6 +365,14 @@ export class StudioCanvas {
       this.cb.onDropAssetFromDock(kind, tx, ty);
     });
 
+    this.canvas.addEventListener('pointerenter', () => {
+      this.pointerInside = true;
+      this.requestRender();
+    });
+    this.canvas.addEventListener('pointerleave', () => {
+      this.pointerInside = false;
+      this.requestRender();
+    });
     this.canvas.addEventListener('pointerdown', (ev) => this.onPointerDown(ev));
     window.addEventListener('pointermove', (ev) => this.onPointerMove(ev));
     window.addEventListener('pointerup', (ev) => this.onPointerUp(ev));
@@ -1667,7 +1676,7 @@ export class StudioCanvas {
     }
 
     // 7. Optional Overlays: Zones, Walkability Grid, Tile Grid
-    if (this.settings.showZones) {
+    if (this.settings.showZones || (this.settings.tool === 'rect' && (this.settings.rectMode === 'room' || this.settings.rectMode === 'zone'))) {
       for (const z of doc.zones) {
         if (z.hidden) continue;
         const zx = z.rect.x * TILE;
@@ -1964,7 +1973,7 @@ export class StudioCanvas {
       return;
     }
 
-    if (!inBounds) return;
+    if (!inBounds || (!this.pointerInside && !d)) return;
 
     if (this.settings.tool === 'brush' || this.settings.tool === 'eraser') {
       const r = Math.floor(this.settings.brushSize / 2);

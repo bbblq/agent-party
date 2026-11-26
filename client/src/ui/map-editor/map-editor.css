@@ -142,8 +142,8 @@
 .ms-topbar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
+  gap: 6px;
+  padding: 4px 8px;
   background: var(--ms-panel);
   border-bottom: 2px solid var(--ms-border);
   flex-shrink: 0;
@@ -153,11 +153,12 @@
 .ms-brand {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   padding-right: 8px;
   border-right: 2px solid var(--ms-border);
   font-weight: 700;
-  letter-spacing: 0.5px;
+  font-size: 12px;
+  letter-spacing: 0.4px;
   color: var(--ms-gold);
 }
 
@@ -166,7 +167,7 @@
   align-items: center;
   gap: 4px;
   flex: 1;
-  min-width: 180px;
+  min-width: 140px;
   overflow-x: auto;
 }
 
@@ -190,7 +191,7 @@
   font: inherit;
   font-size: 11px;
   font-weight: 600;
-  padding: 4px 8px;
+  padding: 3px 7px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -200,7 +201,7 @@
   border: none;
   color: var(--ms-muted);
   cursor: pointer;
-  padding: 2px 6px;
+  padding: 1px 5px;
   font-size: 13px;
 }
 
@@ -211,7 +212,7 @@
 .ms-top-actions {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   flex-wrap: wrap;
 }
 
@@ -220,8 +221,8 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: 32px;
-  padding: 4px 10px;
+  min-height: 28px;
+  padding: 3px 8px;
   background: #131724;
   border-bottom: 2px solid var(--ms-border);
   flex-shrink: 0;
@@ -235,36 +236,54 @@
   white-space: nowrap;
 }
 
-/* 3-Column PS Workspace */
+/* 3-Column Collapsible PS Workspace (maximum canvas room, 3-col zero-overflow swatch grid) */
 .ms-workspace {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 224px 1fr 296px;
+  grid-template-columns: 268px 1fr 252px;
+}
+
+.ms-workspace.is-left-collapsed {
+  grid-template-columns: 40px 1fr 252px;
+}
+
+.ms-workspace.is-right-collapsed {
+  grid-template-columns: 268px 1fr 0px;
+}
+
+.ms-workspace.is-left-collapsed.is-right-collapsed {
+  grid-template-columns: 40px 1fr 0px;
 }
 
 .ms-left-area {
   display: flex;
   min-height: 0;
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
   background: var(--ms-panel);
   border-right: 2px solid var(--ms-border);
 }
 
 .ms-tool-strip {
-  width: 48px;
-  padding: 6px 4px;
+  width: 40px;
+  flex-shrink: 0;
+  padding: 4px 3px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  gap: 3px;
   background: #121622;
   border-right: 2px solid var(--ms-border);
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .ms-tool-btn {
   position: relative;
-  width: 38px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -273,7 +292,8 @@
   background: var(--ms-panel-2);
   color: var(--ms-text);
   cursor: pointer;
-  font-size: 16px;
+  font-size: 14px;
+  flex-shrink: 0;
 }
 
 .ms-tool-btn:hover {
@@ -288,42 +308,55 @@
 
 .ms-tool-btn__key {
   position: absolute;
-  right: 2px;
-  bottom: 1px;
-  font-size: 9px;
+  right: 1px;
+  bottom: 0;
+  font-size: 8px;
   color: var(--ms-muted);
   font-weight: 700;
 }
 
 .ms-palette-dock {
   flex: 1;
+  width: 228px;
   min-width: 0;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow-x: hidden;
+}
+
+.ms-palette-dock[hidden] {
+  display: none;
 }
 
 .ms-dock-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 8px;
+  gap: 4px;
+  padding: 5px 6px;
   font-size: 11px;
   font-weight: 700;
   color: var(--ms-gold);
   border-bottom: 2px solid var(--ms-border);
 }
 
-.ms-mini-tabs {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
+.ms-dock-head__btns {
+  display: flex;
+  align-items: center;
   gap: 3px;
-  padding: 5px;
+}
+
+.ms-mini-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 4px 5px;
   border-bottom: 2px solid var(--ms-border);
 }
 
 .ms-mini-tab {
-  padding: 3px 4px;
+  padding: 2px 6px;
   font: inherit;
   font-size: 10px;
   font-weight: 600;
@@ -331,6 +364,7 @@
   background: #121622;
   color: var(--ms-muted);
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .ms-mini-tab.is-active {
@@ -342,20 +376,27 @@
 .ms-swatch-grid {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
-  padding: 6px;
+  overflow-x: hidden;
+  padding: 5px;
+  box-sizing: border-box;
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 5px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
   align-content: start;
 }
 
 .ms-asset-thumb {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
-  padding: 5px 4px;
+  gap: 2px;
+  padding: 4px 2px;
   border: 2px solid var(--ms-border);
   background: #121622;
   color: var(--ms-text);
@@ -375,19 +416,26 @@
 }
 
 .ms-asset-thumb span {
+  display: block;
+  width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 100%;
 }
 
 .ms-swatch-btn {
-  padding: 8px 4px;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 6px 2px;
   border: 2px solid var(--ms-border);
   background: #121622;
   color: var(--ms-text);
   font: inherit;
-  font-size: 11px;
+  font-size: 10px;
   cursor: pointer;
 }
 
@@ -396,7 +444,7 @@
   background: #173a48;
 }
 
-/* Center Canvas Viewport */
+/* Center Canvas Viewport + Floating Slim HUDs */
 .ms-center-area {
   display: flex;
   flex-direction: column;
@@ -409,6 +457,7 @@
   flex: 1;
   min-height: 0;
   position: relative;
+  overflow: hidden;
 }
 
 .ms-canvas-host {
@@ -423,6 +472,21 @@
   outline: none;
 }
 
+.ms-expand-pill {
+  position: absolute;
+  top: 28px;
+  z-index: 12;
+  background: rgba(18, 22, 34, 0.92);
+}
+
+.ms-expand-pill.is-left {
+  left: 28px;
+}
+
+.ms-expand-pill.is-right {
+  right: 8px;
+}
+
 .ms-ref-hud {
   position: absolute;
   top: 28px;
@@ -432,7 +496,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
+  padding: 5px 10px;
   background: rgba(18, 22, 34, 0.95);
   border: 2px solid var(--ms-gold);
   box-shadow: 0 4px 0 #07090e;
@@ -447,12 +511,23 @@
 }
 
 .ms-ai-dock {
-  background: var(--ms-panel);
-  border-top: 2px solid var(--ms-border);
+  position: absolute;
+  bottom: 36px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(820px, calc(100% - 28px));
+  z-index: 14;
+  background: rgba(23, 28, 43, 0.95);
+  border: 2px solid var(--ms-green);
+  box-shadow: 0 4px 0 #07090e;
   padding: 6px 10px;
   display: flex;
   flex-direction: column;
   gap: 5px;
+}
+
+.ms-ai-dock[hidden] {
+  display: none;
 }
 
 .ms-ai-dock__top {
@@ -505,22 +580,26 @@
   font-weight: 700;
 }
 
-.ms-status-bar {
-  display: flex;
+.ms-float-status-left,
+.ms-float-status-right {
+  position: absolute;
+  bottom: 6px;
+  z-index: 12;
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 4px 10px;
-  background: #10141f;
-  border-top: 2px solid var(--ms-border);
+  gap: 6px;
+  padding: 3px 8px;
+  background: rgba(16, 20, 31, 0.88);
+  border: 2px solid var(--ms-border);
   font-size: 11px;
 }
 
-.ms-status-left,
-.ms-status-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.ms-float-status-left {
+  left: 28px;
+}
+
+.ms-float-status-right {
+  right: 8px;
 }
 
 .ms-status-mode {
@@ -530,10 +609,16 @@
 /* Right Dock: Pure Element Inspector + Layers & Groups */
 .ms-right-dock {
   display: grid;
-  grid-template-rows: minmax(190px, auto) 1fr;
+  grid-template-rows: minmax(170px, auto) 1fr;
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
   background: var(--ms-panel);
   border-left: 2px solid var(--ms-border);
+}
+
+.ms-workspace.is-right-collapsed .ms-right-dock {
+  border-left: none;
 }
 
 .ms-inspector {
@@ -1017,6 +1102,31 @@
 
 .ms-val-item.is-ok {
   border-color: var(--ms-green);
+}
+
+/* Standalone Fullscreen Asset Catalog Page (/map/assets) */
+.ms-catalog-standalone-body {
+  margin: 0;
+  padding: 0;
+  background: var(--ms-bg);
+  color: var(--ms-text);
+  font-family: 'Pixelify Sans', system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  overflow: auto !important;
+  height: auto !important;
+}
+
+.ms-catalog-page-root {
+  position: static !important;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--ms-bg);
+  color: var(--ms-text);
+  font-size: 12px;
+}
+
+.ms-catalog-standalone-body .ms-catalog-grid {
+  overflow-y: visible;
 }
 
 /* Asset Catalog Encyclopedia View (/map/assets) */
