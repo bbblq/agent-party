@@ -1223,8 +1223,8 @@ export class Renderer {
     }
 
     ctx.globalAlpha = 1;
-    head.x = x;
-    head.feetY = y;
+    head.x = isArenaFighter && st.phase === 'fight' ? baseX : x;
+    head.feetY = isArenaFighter && st.phase === 'fight' ? baseY : y;
     head.visible = true;
     head.depth = ch.depth();
     // ícone sobre a cabeça (desenhado depois da luz)

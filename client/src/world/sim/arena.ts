@@ -471,26 +471,16 @@ export class ArenaController {
         const defender = this.sim.chars.get(fx.toId);
         if (attacker && !attacker.gone) {
           attacker.pose = fx.category === 'status' ? 'cheer' : 'play';
-          sayLine(attacker, fx.moveName, 1900, now);
+          attacker.sayUntil = 0;
         }
         if (defender && !defender.gone && fx.category !== 'status') {
+          defender.sayUntil = 0;
           if (fx.dodged) {
             defender.pose = 'run';
-            sayLine(defender, '闪开了！💨', 1300, now);
           } else if (fx.effectiveness === 'immune') {
             defender.pose = 'stand';
-            sayLine(defender, '对我没用！🛡️', 1300, now);
           } else {
             defender.pose = 'sulk';
-            const hitLine =
-              fx.effectiveness === 'double_super' || fx.effectiveness === 'super'
-                ? '好痛！！💥'
-                : fx.crit
-                  ? '好险！！💢'
-                  : '唔！💥';
-            if (Math.random() < 0.85 || fx.crit || fx.effectiveness === 'super' || fx.effectiveness === 'double_super') {
-              sayLine(defender, hitLine, 1200, now);
-            }
           }
         }
         if (Math.random() < 0.45) {
@@ -771,13 +761,15 @@ export class ArenaController {
     }
     this.shuffle(cands);
 
+    const arena = this.sim.building.arena;
     let added = 0;
     for (const c of cands) {
       if (added >= limit) break;
       const spot = watchSpots.find((s) => this.sim.spots.isFree(s.id, c.id) && this.sim.canUseSeat(c, s));
       if (!spot) continue;
       this.state.watchers.push(c.id);
-      if (this.dispatchToSpot(c, spot, false, '有宝可梦决斗，去围观！🍿', now)) {
+      const northWatch = !arena || spot.ty < arena.rect.y + 7;
+      if (this.dispatchToSpot(c, spot, false, northWatch ? '有宝可梦决斗，去围观！🍿' : null, now)) {
         added++;
       } else {
         const idx = this.state.watchers.indexOf(c.id);
@@ -862,8 +854,8 @@ export class ArenaController {
     this.state.rightAwakened = false;
     left.dir = 'right';
     right.dir = 'left';
-    sayLine(left, '决斗开始！⚔️', 2200, now);
-    sayLine(right, '放马过来吧！🔥', 2200, now);
+    sayLine(left, '决斗开始！⚔️', 1300, now);
+    sayLine(right, '放马过来吧！🔥', 1300, now);
     this.nextExchangeAt = now + 1_800;
     this.nextCheerAt = now + 3_500;
   }
@@ -886,6 +878,23 @@ export class ArenaController {
     });
     const hitRatio = computeHitRatio(attacker, turn.move.category);
 
+    let awakenText: string | undefined;
+    if (turn.defenderJustAwakened) {
+      awakenText =
+        defBattle.archetype === 'human'
+          ? '☕ 爆肝觉醒！'
+          : defBattle.archetype === 'custom_pet'
+            ? '🐾 彻底认真了！'
+            : '🔥 气势爆发！';
+    } else if (turn.attackerJustAwakened) {
+      awakenText =
+        atkBattle.archetype === 'human'
+          ? '☕ 爆肝觉醒！'
+          : atkBattle.archetype === 'custom_pet'
+            ? '🐾 彻底认真了！'
+            : '🔥 气势爆发！';
+    }
+
     const fx: SyncedArenaFx = {
       id: this.fxSeq++,
       kind: turn.move.fx,
@@ -902,6 +911,7 @@ export class ArenaController {
       crit: turn.crit,
       dodged: turn.dodged,
       ...(turn.buffText ? { buffText: turn.buffText } : {}),
+      ...(awakenText ? { awakenText } : {}),
       ...(turn.ko ? { ko: true } : {}),
       hitRatio,
     };
@@ -911,33 +921,18 @@ export class ArenaController {
     this.state.leftAwakened = this.leftBattle.awakened;
     this.state.rightAwakened = this.rightBattle.awakened;
 
+    // Clear head speech bubbles during combat; move banner & hit popups in arena-render handle callouts without overlap
+    attacker.sayUntil = 0;
+    defender.sayUntil = 0;
     attacker.pose = turn.move.category === 'status' ? 'cheer' : 'play';
-    sayLine(attacker, turn.move.name, 1900, now);
 
     if (turn.move.category !== 'status') {
       if (turn.dodged) {
         defender.pose = 'run';
-        sayLine(defender, '闪开了！💨', 1300, now);
       } else if (turn.effectiveness === 'immune') {
         defender.pose = 'stand';
-        sayLine(defender, '对我没用！🛡️', 1300, now);
       } else {
         defender.pose = 'sulk';
-        if (turn.defenderJustAwakened) {
-          const line =
-            defBattle.archetype === 'human'
-              ? 'Deadline 之力觉醒！☕'
-              : defBattle.archetype === 'custom_pet'
-                ? '还能再战！！🐾'
-                : '气势爆发！！🔥';
-          sayLine(defender, line, 1500, now);
-        } else if (turn.effectiveness === 'double_super' || turn.effectiveness === 'super') {
-          sayLine(defender, '好痛！！💥', 1200, now);
-        } else if (turn.crit) {
-          sayLine(defender, '好险！！💢', 1200, now);
-        } else if (Math.random() < 0.7) {
-          sayLine(defender, '唔！💥', 1200, now);
-        }
       }
     }
 
@@ -947,10 +942,13 @@ export class ArenaController {
   }
 
   private runWatcherCheer(now: number): void {
+    const arena = this.sim.building.arena;
     const arrived: Character[] = [];
     for (const id of this.state.watchers) {
       const w = this.sim.chars.get(id);
-      if (w && !w.gone && !w.leaving && w.step?.t !== 'go') arrived.push(w);
+      if (!w || w.gone || w.leaving || w.step?.t === 'go') continue;
+      if (arena && w.y >= (arena.rect.y + 7.5) * 16) continue;
+      arrived.push(w);
     }
     if (!arrived.length) return;
     const picked = arrived[Math.floor(Math.random() * arrived.length)];

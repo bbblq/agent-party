@@ -687,6 +687,7 @@ export function drawArenaOverlay(
   ctx.textBaseline = 'middle';
 
   // ---- 顶部对决牌子：XXX vs XXX + 倒计时 / 血条
+  let bannerBotY = topY + 12;
   if (st.phase === 'idle') {
     const label = '⚡ 宝可梦决斗场';
     ctx.font = `700 ${zoom < 1.35 ? 10.5 : 12}px ${UI_FONT}`;
@@ -705,6 +706,7 @@ export function drawArenaOverlay(
     ctx.textAlign = 'center';
     ctx.fillText(label, centerX, by + h / 2 + 0.5);
     reserve?.(bx, by, w, h);
+    bannerBotY = by + h;
   } else {
     const leftName = st.leftName ?? '红方';
     const rightName = st.rightName ?? '蓝方';
@@ -737,6 +739,7 @@ export function drawArenaOverlay(
       ctx.textAlign = 'center';
       ctx.fillText(txt, centerX, by + h / 2 + 0.5, w - 8);
       reserve?.(bx, by, w, h);
+      bannerBotY = by + h;
     } else {
       const leftTypes = st.leftTypes ?? [];
       const rightTypes = st.rightTypes ?? [];
@@ -747,6 +750,7 @@ export function drawArenaOverlay(
       const bx = Math.round(centerX - boxW / 2);
       const by = Math.round(topY - boxH / 2 + 2);
       reserve?.(bx, by, boxW, boxH);
+      bannerBotY = by + boxH;
 
       ctx.fillStyle = 'rgba(13, 19, 32, 0.92)';
       ctx.strokeStyle = 'rgba(250, 204, 21, 0.88)';
@@ -843,14 +847,53 @@ export function drawArenaOverlay(
     }
   }
 
-  // ---- 决斗伤害 / 属性克制 / 暴击 / 闪避 / Buff 飘字
+  // ---- 招式播报条（替代选手头顶说话气泡） + 伤害 / 属性克制 / 暴击 / 闪避 / Buff 飘字
   const activeFx = st.fx;
-  if (activeFx && now >= activeFx.at && now <= activeFx.until && zoom >= 0.7) {
+  if (st.phase === 'fight' && activeFx && now >= activeFx.at && now <= activeFx.until && zoom >= 0.7) {
     const span = Math.max(1, activeFx.until - activeFx.at);
     const u = (now - activeFx.at) / span;
     const hitR = activeFx.hitRatio ?? 0.38;
     const fromChar = sim.chars.get(activeFx.fromId);
     const toChar = sim.chars.get(activeFx.toId);
+    const attackerName = fromChar?.info.name ?? (activeFx.fromId === st.leftId ? st.leftName ?? '红方' : st.rightName ?? '蓝方');
+
+    // 1) 顶部 VS 横幅下方招式播报条（绝不遮挡选手与技能特效）
+    const stripAlpha = u > 0.82 ? Math.max(0, (1 - u) / 0.18) : Math.min(1, u / 0.12);
+    const moveText = `${attackerName} ▸ ${activeFx.moveName}`;
+    const stripFont = `700 ${zoom < 1.35 ? 9.5 : 10.5}px ${UI_FONT}`;
+    ctx.font = stripFont;
+    const stripW = Math.min(maxBannerW, Math.ceil(ctx.measureText(moveText).width) + 20);
+    const stripH = zoom < 1.35 ? 16 : 18;
+    const stripX = Math.round(centerX - stripW / 2);
+    const stripY = Math.round(bannerBotY + 3);
+    const accentBg = activeFx.moveType ? POKEMON_TYPE_META[activeFx.moveType].bg : '#facc15';
+    ctx.save();
+    ctx.globalAlpha = stripAlpha;
+    ctx.fillStyle = 'rgba(13, 19, 32, 0.88)';
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.45)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(stripX, stripY, stripW, stripH, 6);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = accentBg;
+    ctx.beginPath();
+    ctx.roundRect(stripX, stripY, 4, stripH, [6, 0, 0, 6]);
+    ctx.fill();
+    ctx.fillStyle = '#f8fafc';
+    ctx.textAlign = 'center';
+    ctx.fillText(moveText, centerX + 2, stripY + stripH / 2 + 0.5, stripW - 14);
+    ctx.restore();
+    reserve?.(stripX, stripY, stripW, stripH);
+
+    // 预留双方与技能弹道走廊，防止围观群众气泡侵入战场
+    if (fromChar && toChar) {
+      const fxMinX = Math.round(sx(Math.min(fromChar.x, toChar.x) - 10));
+      const fxMaxX = Math.round(sx(Math.max(fromChar.x, toChar.x) + 10));
+      const fxTopY = Math.round(sy(Math.min(fromChar.y, toChar.y) - 24));
+      const fxBotY = Math.round(sy(Math.max(fromChar.y, toChar.y)));
+      reserve?.(fxMinX, fxTopY, Math.max(16, fxMaxX - fxMinX), Math.max(16, fxBotY - fxTopY));
+    }
 
     const drawFloatText = (text: string, wx: number, wy: number, fill: string, fontPx: number, alpha: number) => {
       if (alpha <= 0.02) return;
@@ -864,19 +907,23 @@ export function drawArenaOverlay(
       ctx.fillStyle = fill;
       ctx.fillText(text, wx, wy);
       ctx.restore();
+      const tw = Math.ceil(ctx.measureText(text).width) + 6;
+      reserve?.(Math.round(wx - tw / 2), Math.round(wy - fontPx / 2 - 2), tw, fontPx + 4);
     };
 
     if (activeFx.category === 'status' && fromChar && u >= 0.25) {
       const popU = (u - 0.25) / 0.75;
       const alpha = popU > 0.75 ? (1 - popU) / 0.25 : 1;
-      const fxX = sx(fromChar.x);
-      const fxY = sy(fromChar.y - 24) - popU * 16;
+      const outDir = activeFx.fromId === st.leftId ? -1 : 1;
+      const fxX = sx(fromChar.x + outDir * 9);
+      const fxY = sy(fromChar.y - 30) - popU * 14;
       drawFloatText(activeFx.buffText ?? '状态提升！⬆️', fxX, fxY, '#4ade80', zoom < 1.35 ? 10.5 : 12, alpha);
     } else if (toChar && u >= hitR && activeFx.category !== 'status') {
       const popU = (u - hitR) / Math.max(0.1, 1 - hitR);
       const alpha = popU > 0.75 ? (1 - popU) / 0.25 : 1;
-      const popX = sx(toChar.x);
-      const popY = sy(toChar.y - 24) - popU * 18;
+      const outDir = activeFx.toId === st.leftId ? -1 : 1;
+      const popX = sx(toChar.x + outDir * 9);
+      const popY = sy(toChar.y - 31) - popU * 16;
       const basePx = zoom < 1.35 ? 11 : 13;
 
       if (activeFx.dodged) {
@@ -906,8 +953,13 @@ export function drawArenaOverlay(
           dmgColor = '#cbd5e1';
         }
         drawFloatText(`-${dmg}`, popX, popY, dmgColor, activeFx.crit ? basePx + 2 : basePx, alpha);
+        let nextY = popY - (basePx + 1);
         if (subLabel) {
-          drawFloatText(subLabel, popX, popY - (basePx + 1), subColor, Math.max(9.5, basePx - 2), alpha);
+          drawFloatText(subLabel, popX, nextY, subColor, Math.max(9.5, basePx - 2), alpha);
+          nextY -= Math.max(10, basePx - 1);
+        }
+        if (activeFx.awakenText) {
+          drawFloatText(activeFx.awakenText, popX, nextY, '#fb923c', Math.max(9.5, basePx - 2), alpha);
         }
       }
     }

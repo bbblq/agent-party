@@ -919,6 +919,7 @@ export interface SyncedArenaFx {
   crit?: boolean;
   dodged?: boolean;
   buffText?: string;
+  awakenText?: string;
   ko?: boolean;
   hitRatio?: number;
 }

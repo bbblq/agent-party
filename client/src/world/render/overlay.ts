@@ -623,8 +623,38 @@ export class Overlay {
     return b;
   }
 
+  private arenaParticipantRole(ch: Character): 'fighter' | 'south_watcher' | 'watcher' | null {
+    const st = this.sim.arena.state;
+    if (st.phase === 'idle') return null;
+    if (ch.id === st.leftId || ch.id === st.rightId) return 'fighter';
+    if (st.watchers.includes(ch.id)) {
+      const arena = this.sim.building.arena;
+      if (arena && ch.y >= (arena.rect.y + 7.5) * TILE) return 'south_watcher';
+      return 'watcher';
+    }
+    return null;
+  }
+
   private bubbleFor(ch: Character, head: HeadInfo, now: number, opts: WorldOptions, selected: boolean, hovered: boolean): Bubble | null {
     if (opts.bubbles === 'none') return null;
+    const arenaRole = this.arenaParticipantRole(ch);
+    const arenaPhase = this.sim.arena.state.phase;
+    if (arenaRole === 'fighter') {
+      if (arenaPhase === 'fight') return null;
+      if (ch.sayText && now < ch.sayUntil && !ch.leaving) {
+        const a = Math.min(1, (now - ch.sayAt) / 120, (ch.sayUntil - now) / 300);
+        return this.takeBubble(ch, head, sayIcon(ch.sayText), ch.sayText, 'say', 55, a, ch.sayAt);
+      }
+      return null;
+    }
+    if (arenaRole === 'south_watcher' || arenaRole === 'watcher') {
+      if (arenaRole === 'south_watcher' && arenaPhase === 'fight') return null;
+      if (ch.sayText && now < ch.sayUntil && !ch.leaving) {
+        const a = Math.min(1, (now - ch.sayAt) / 120, (ch.sayUntil - now) / 300);
+        return this.takeBubble(ch, head, sayIcon(ch.sayText), ch.sayText, 'say', 55, a, ch.sayAt);
+      }
+      return null;
+    }
     if (this.sim.isCharacterOnLunch(ch)) {
       if (ch.sayText && now < ch.sayUntil && !ch.leaving) {
         const a = Math.min(1, (now - ch.sayAt) / 120, (ch.sayUntil - now) / 300);
@@ -825,8 +855,10 @@ export class Overlay {
   /** Mini-balões das conversas (só emoji). */
   private drawChats(now: number): void {
     const { ctx } = this;
+    const arenaPhase = this.sim.arena.state.phase;
     for (const ch of this.sim.chars.values()) {
       if (!ch.chatEmoji || now > ch.chatUntil) continue;
+      if (arenaPhase === 'fight' && this.arenaParticipantRole(ch) === 'fighter') continue;
       const head = this.renderer.heads.get(ch.id);
       if (!head || !head.visible) continue;
       const px = this.sx(head.x);

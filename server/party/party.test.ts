@@ -1748,10 +1748,17 @@ describe('Pokémon Duel Arena layout, lifecycle & leaderboard persistence', () =
     let now = startAt + 500;
     let sawRichFx = false;
     let finishedEarlyOrAtEnd = false;
+    const hChar = ws.sim.chars.get('h-duel')!;
+    const dfyChar = ws.sim.chars.get('dfy-duel')!;
     for (let i = 0; i < 360; i++) {
       now += 250;
       ws.step(now);
       const st = ws.sim.arena.state;
+      if (st.phase === 'fight' && st.fx) {
+        // Fight exchanges clear head speech bubbles so move callouts don't overlap skill VFX/popups
+        expect(hChar.sayUntil).toBe(0);
+        expect(dfyChar.sayUntil).toBe(0);
+      }
       if (st.fx && st.fx.category && st.fx.moveType && st.fx.effectiveness) {
         sawRichFx = true;
       }
