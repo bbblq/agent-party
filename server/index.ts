@@ -2,9 +2,8 @@
 //   npm run dev   -> tsx watch server/index.ts --dev (Vite middleware HMR)
 //   npm start     -> node dist/server/index.js (静态托管 dist/client)
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, createReadStream, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
-import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { appearanceFromSeed } from '../client/src/art/character/appearance';
 import { renderCharacter } from '../client/src/art/character/render';
@@ -15,6 +14,7 @@ import { renderReportScript, renderWatchScript } from './party/client-scripts';
 import { renderCustomizeHtml } from './party/customize-page';
 import { OfficeFeedTracker } from './party/feed';
 import { MapManager } from './party/map-manager';
+import { resolveStudioEndpoints } from './party/lan-endpoints';
 import { handleMcpRpc, renderMapMcpScript, renderMapStudioSetupMarkdown, resolveMcpAuth } from './party/mcp-server';
 import { parseBoundary, parseMultipart } from './party/multipart';
 import { MAX_PET_SPRITE_BYTES, PetRegistry } from './party/pets';
@@ -202,23 +202,6 @@ function getBaseUrl(req: http.IncomingMessage): string {
   const proto = protoHeader || 'http';
   const reqHost = (typeof req.headers['x-forwarded-host'] === 'string' ? req.headers['x-forwarded-host'].split(',')[0].trim() : '') || req.headers.host || `127.0.0.1:${port}`;
   return `${proto}://${reqHost}`;
-}
-
-function detectLanUrl(listenPort: number): string | null {
-  try {
-    const nets = networkInterfaces();
-    for (const ifaces of Object.values(nets)) {
-      if (!ifaces) continue;
-      for (const net of ifaces) {
-        if (net.family === 'IPv4' && !net.internal && net.address) {
-          return `http://${net.address}:${listenPort}`;
-        }
-      }
-    }
-  } catch {
-    // ignore interface lookup error
-  }
-  return null;
 }
 
 function parseUrl(req: http.IncomingMessage): URL {
@@ -659,7 +642,8 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     return true;
   }
   if (method === 'GET' && p === '/client-scripts/map-mcp.mjs') {
-    sendText(res, 200, renderMapMcpScript(getBaseUrl(req)), 'text/javascript; charset=utf-8');
+    const scriptBase = (url.searchParams.get('base') || getBaseUrl(req)).replace(/\/+$/, '');
+    sendText(res, 200, renderMapMcpScript(scriptBase), 'text/javascript; charset=utf-8');
     return true;
   }
 
@@ -682,10 +666,11 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       ...(session.draftInstruction ? { draftInstruction: session.draftInstruction } : {}),
       tasks: mapManager.getTaskSummaries(session.sessionId),
       presence: mapManager.getMcpPresence(session.sessionId),
-      endpoints: {
-        baseUrl: getBaseUrl(req),
-        lanUrl: detectLanUrl(port),
-      },
+      endpoints: resolveStudioEndpoints({
+        req,
+        listenPort: port,
+        publicBaseUrl: getBaseUrl(req),
+      }),
       summary: validateMapPlayability(session.doc),
     });
     return true;
@@ -746,10 +731,11 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
         ...(session.draftInstruction ? { draftInstruction: session.draftInstruction } : {}),
         tasks: mapManager.getTaskSummaries(session.sessionId),
         presence: mapManager.getMcpPresence(session.sessionId),
-        endpoints: {
-          baseUrl: getBaseUrl(req),
-          lanUrl: detectLanUrl(port),
-        },
+        endpoints: resolveStudioEndpoints({
+          req,
+          listenPort: port,
+          publicBaseUrl: getBaseUrl(req),
+        }),
         summary: validateMapPlayability(session.doc),
       });
       return true;

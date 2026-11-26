@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBlankCustomMap } from '../../shared/map';
+import { resolveStudioEndpoints } from './lan-endpoints';
 import { MapManager } from './map-manager';
 import { handleMcpRpc, renderMapStudioSetupMarkdown, resolveMcpAuth } from './mcp-server';
 import { PetRegistry } from './pets';
@@ -308,5 +309,55 @@ describe('MapManager + MCP Studio workflow & Admin live map switching', () => {
     expect(selJson.draftBoxes).toHaveLength(2);
     expect(selJson.draftBoxes[0].ascii).toBeTruthy();
     expect(selJson.draftBoxes[1].note).toBe('改咖啡区');
+  });
+
+  it('filters Docker 172.17-31 bridge IPs and prefers 192.168 LAN / host env / request host', () => {
+    const dockerBridgeIfaces = {
+      lo: [{ address: '127.0.0.1', netmask: '255.0.0.0', family: 'IPv4', mac: '', internal: true, cidr: '127.0.0.1/8' }],
+      eth0: [{ address: '172.17.0.2', netmask: '255.255.0.0', family: 'IPv4', mac: '', internal: false, cidr: '172.17.0.2/16' }],
+    } as unknown as ReturnType<typeof import('node:os').networkInterfaces>;
+
+    // 1. Bridged Docker behind public domain: filters 172.17.0.2 into dockerInternalUrl and avoids exposing it as LAN URL
+    const bridgedReq = { headers: { host: 'party.example.com' } } as unknown as http.IncomingMessage;
+    const ep1 = resolveStudioEndpoints({
+      req: bridgedReq,
+      listenPort: 4747,
+      publicBaseUrl: 'https://party.example.com',
+      ifaces: dockerBridgeIfaces,
+      env: {},
+      inDocker: true,
+    });
+    expect(ep1.lanUrl).toBeNull();
+    expect(ep1.lanUrls).toEqual([]);
+    expect(ep1.dockerInternalUrl).toBe('http://172.17.0.2:4747');
+
+    // 2. Same bridged Docker accessed directly from LAN IP or configured with HOST_IP -> exposes 192.168.x.x cleanly
+    const ep2 = resolveStudioEndpoints({
+      req: { headers: { host: '192.168.31.50:4747' } } as unknown as http.IncomingMessage,
+      listenPort: 4747,
+      publicBaseUrl: 'https://party.example.com',
+      ifaces: dockerBridgeIfaces,
+      env: { HOST_IP: '192.168.1.88' },
+      inDocker: true,
+    });
+    expect(ep2.lanUrl).toBe('http://192.168.1.88:4747');
+    expect(ep2.lanUrls).toEqual(['http://192.168.1.88:4747', 'http://192.168.31.50:4747']);
+
+    // 3. Multi-NIC host / Docker host mode: ignores docker0 172.17.0.1 and prioritizes real 192.168 NIC over 10.x
+    const multiNic = {
+      docker0: [{ address: '172.17.0.1', netmask: '255.255.0.0', family: 'IPv4', mac: '', internal: false, cidr: '172.17.0.1/16' }],
+      tun0: [{ address: '10.8.0.2', netmask: '255.255.255.0', family: 'IPv4', mac: '', internal: false, cidr: '10.8.0.2/24' }],
+      enp3s0: [{ address: '192.168.50.12', netmask: '255.255.255.0', family: 'IPv4', mac: '', internal: false, cidr: '192.168.50.12/24' }],
+    } as unknown as ReturnType<typeof import('node:os').networkInterfaces>;
+    const ep3 = resolveStudioEndpoints({
+      req: bridgedReq,
+      listenPort: 4747,
+      publicBaseUrl: 'https://party.example.com',
+      ifaces: multiNic,
+      env: {},
+      inDocker: false,
+    });
+    expect(ep3.lanUrl).toBe('http://192.168.50.12:4747');
+    expect(ep3.lanUrls).toEqual(['http://192.168.50.12:4747', 'http://10.8.0.2:4747']);
   });
 });

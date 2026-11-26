@@ -489,6 +489,7 @@ export class AssetCatalogView {
  */
 export function startAssetCatalogPage(): void {
   document.title = 'Agent Party — 全素材图鉴百科';
+  document.documentElement.classList.add('ms-catalog-standalone-html');
   document.body.classList.add('ms-catalog-standalone-body');
   const worldCanvas = document.getElementById('world');
   if (worldCanvas) worldCanvas.style.display = 'none';

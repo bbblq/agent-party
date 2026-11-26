@@ -1,10 +1,19 @@
 import type { StudioMcpPresence, StudioTaskBox, StudioTaskSummary } from '../../../../shared/map';
 import { copyTextSafe } from './clipboard-http-utils';
 
+export interface StudioEndpointsInfo {
+  baseUrl: string;
+  requestUrl?: string;
+  lanUrl: string | null;
+  lanUrls?: string[];
+  dockerInternalUrl?: string | null;
+  listenPort?: number;
+}
+
 export interface McpModalContext {
   sessionId: string;
   studioToken: string;
-  endpoints: { baseUrl: string; lanUrl: string | null };
+  endpoints: StudioEndpointsInfo;
   presence: StudioMcpPresence;
   tasks: StudioTaskSummary[];
   draftBoxes: readonly StudioTaskBox[];
@@ -14,13 +23,52 @@ export interface McpModalContext {
   onToast: (msg: string) => void;
 }
 
+const ORIGIN_PREF_KEY = 'agent_party_mcp_origin_pref_v1';
+const CUSTOM_LAN_KEY = 'agent_party_mcp_custom_lan_v1';
+
+function isLan192Or10Url(urlStr: string): boolean {
+  try {
+    const h = new URL(urlStr).hostname;
+    return h.startsWith('192.168.') || h.startsWith('10.');
+  } catch {
+    return false;
+  }
+}
+
+function isLocalhostUrl(urlStr: string): boolean {
+  try {
+    const h = new URL(urlStr).hostname.toLowerCase();
+    return h === 'localhost' || h === '127.0.0.1' || h === '::1';
+  } catch {
+    return false;
+  }
+}
+
+function normalizeCustomOrigin(raw: string, fallbackPort: number): string | null {
+  const s = raw.trim().replace(/\/+$/, '');
+  if (!s) return null;
+  try {
+    const withProto = /^https?:\/\//i.test(s) ? s : `http://${s}`;
+    const u = new URL(withProto);
+    if (!u.port && u.protocol === 'http:' && fallbackPort !== 80) {
+      u.port = String(fallbackPort);
+    }
+    return u.origin;
+  } catch {
+    return null;
+  }
+}
+
 export class McpModal {
   readonly el: HTMLElement;
-  private hostMode: 'auto' | 'lan' = 'auto';
+  private selectedOrigin: string;
+  private customLan: string;
   private activeTab: 'prompts' | 'config' | 'guide' = 'prompts';
   private lastCtx: McpModalContext | null = null;
 
   constructor() {
+    this.selectedOrigin = localStorage.getItem(ORIGIN_PREF_KEY) || '';
+    this.customLan = localStorage.getItem(CUSTOM_LAN_KEY) || '';
     this.el = document.createElement('div');
     this.el.className = 'ms-modal-backdrop';
     this.el.hidden = true;
@@ -48,24 +96,79 @@ export class McpModal {
     this.el.hidden = true;
   }
 
-  private effectiveOrigin(ctx: McpModalContext): string {
-    if (this.hostMode === 'lan' && ctx.endpoints.lanUrl) {
-      return ctx.endpoints.lanUrl.replace(/\/+$/, '');
+  private collectOriginChoices(ctx: McpModalContext): Array<{ url: string; label: string; kind: 'custom' | 'lan' | 'browser' | 'public' }> {
+    const choices: Array<{ url: string; label: string; kind: 'custom' | 'lan' | 'browser' | 'public' }> = [];
+    const seen = new Set<string>();
+    const push = (raw: string | null | undefined, labelPrefix: string, kind: 'custom' | 'lan' | 'browser' | 'public') => {
+      if (!raw) return;
+      const clean = raw.replace(/\/+$/, '');
+      if (!clean || seen.has(clean)) return;
+      seen.add(clean);
+      choices.push({ url: clean, label: `${labelPrefix} ${clean}`, kind });
+    };
+
+    const browserOrigin = typeof location !== 'undefined' ? location.origin.replace(/\/+$/, '') : '';
+    const serverLanList = [
+      ...(ctx.endpoints.lanUrls ?? []),
+      ...(ctx.endpoints.lanUrl ? [ctx.endpoints.lanUrl] : []),
+    ];
+
+    if (this.customLan) {
+      push(this.customLan, '🏠 自定义内网', 'custom');
     }
-    const raw = (ctx.endpoints.baseUrl || location.origin).replace(/\/+$/, '');
-    if (ctx.endpoints.lanUrl && /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(raw)) {
-      return ctx.endpoints.lanUrl.replace(/\/+$/, '');
+    if (browserOrigin && !isLocalhostUrl(browserOrigin)) {
+      if (isLan192Or10Url(browserOrigin)) {
+        push(browserOrigin, '🏠 浏览器内网', 'lan');
+      } else if (browserOrigin !== ctx.endpoints.baseUrl?.replace(/\/+$/, '')) {
+        push(browserOrigin, '🌐 当前访问', 'browser');
+      }
     }
-    return raw;
+    for (const u of serverLanList) {
+      push(u, '🏠 局域网 IP', 'lan');
+    }
+    if (ctx.endpoints.requestUrl && !isLocalhostUrl(ctx.endpoints.requestUrl)) {
+      push(ctx.endpoints.requestUrl, '🌐 请求地址', 'browser');
+    }
+    if (ctx.endpoints.baseUrl) {
+      push(ctx.endpoints.baseUrl, isLan192Or10Url(ctx.endpoints.baseUrl) ? '🏠 服务地址' : '🌍 主/公网域名', 'public');
+    }
+    if (browserOrigin && !seen.has(browserOrigin)) {
+      push(browserOrigin, '🏠 当前页面', 'browser');
+    }
+    return choices;
+  }
+
+  private effectiveOrigin(ctx: McpModalContext, choices: Array<{ url: string; kind: string }>): string {
+    if (this.selectedOrigin && choices.some((c) => c.url === this.selectedOrigin)) {
+      return this.selectedOrigin;
+    }
+    const customChoice = choices.find((c) => c.kind === 'custom');
+    if (customChoice) return customChoice.url;
+
+    const browserOrigin = typeof location !== 'undefined' ? location.origin.replace(/\/+$/, '') : '';
+    if (browserOrigin && isLan192Or10Url(browserOrigin)) return browserOrigin;
+
+    const lanChoice = choices.find((c) => c.kind === 'lan');
+    if (lanChoice) return lanChoice.url;
+
+    if (browserOrigin && !isLocalhostUrl(browserOrigin)) return browserOrigin;
+    return (ctx.endpoints.baseUrl || browserOrigin || 'http://127.0.0.1:4747').replace(/\/+$/, '');
   }
 
   private render(): void {
     const ctx = this.lastCtx;
     if (!ctx) return;
 
-    const origin = this.effectiveOrigin(ctx);
+    const choices = this.collectOriginChoices(ctx);
+    const origin = this.effectiveOrigin(ctx, choices);
+    const hasLanCandidate = choices.some((c) => isLan192Or10Url(c.url));
+    const portHint =
+      (typeof location !== 'undefined' && location.port ? Number(location.port) : 0) ||
+      ctx.endpoints.listenPort ||
+      4747;
+
     const mcpUrl = `${origin}/api/mcp/${ctx.studioToken || '<尚未建立会话>'}`;
-    const scriptUrl = `${origin}/client-scripts/map-mcp.mjs`;
+    const scriptUrl = `${origin}/client-scripts/map-mcp.mjs?base=${encodeURIComponent(origin)}`;
     const setupMdUrl = `${origin}/map-studio-setup.md?token=${encodeURIComponent(ctx.studioToken || '')}&base=${encodeURIComponent(origin)}`;
 
     const boxSummary = ctx.draftBoxes.length
@@ -134,7 +237,7 @@ export class McpModal {
     header.append(closeBtn);
     card.append(header);
 
-    // HTTP LAN warning + Session bar
+    // Session & Docker/LAN Origin Picker Bar
     const infoBar = document.createElement('div');
     infoBar.className = 'ms-mcp-infobar';
     const sidHtml = ctx.studioToken
@@ -145,6 +248,7 @@ export class McpModal {
         <div class="ms-mcp-infobar__meta">${sidHtml}</div>
         <div class="ms-mcp-infobar__actions" data-slot="session-actions"></div>
       </div>
+      <div class="ms-mcp-origin-box" data-slot="origin-box"></div>
       <div class="ms-mcp-http-tip">
         💡 <b>内网 HTTP 兼容说明：</b>网页无法直接向你的 AI 客户端对话框自动输入消息，且浏览器在非 HTTPS 内网地址（如 <code>http://192.168.x.x</code>）下会禁用一键剪贴板 API。下方每个区域均配有<b>【降级一键复制 + 完整可手动 Ctrl+C 文本框】</b>；MCP 连接成功后，直接复制【启动提示词】发进你的 AI 对话框即可！
       </div>
@@ -158,17 +262,6 @@ export class McpModal {
       connBtn.onclick = () => void ctx.onConnectSession();
       actionsSlot.append(connBtn);
     } else {
-      if (ctx.endpoints.lanUrl) {
-        const hostBtn = document.createElement('button');
-        hostBtn.type = 'button';
-        hostBtn.className = 'ms-btn ms-btn--sm';
-        hostBtn.textContent = this.hostMode === 'lan' ? '🌐 地址: 局域网 IP' : '🏠 地址: 当前/本机';
-        hostBtn.onclick = () => {
-          this.hostMode = this.hostMode === 'lan' ? 'auto' : 'lan';
-          this.render();
-        };
-        actionsSlot.append(hostBtn);
-      }
       const rotBtn = document.createElement('button');
       rotBtn.type = 'button';
       rotBtn.className = 'ms-btn ms-btn--sm';
@@ -176,6 +269,87 @@ export class McpModal {
       rotBtn.onclick = () => void ctx.onRotateToken();
       actionsSlot.append(rotBtn);
     }
+
+    const originBox = infoBar.querySelector('[data-slot="origin-box"]')!;
+    const pillsRow = document.createElement('div');
+    pillsRow.className = 'ms-mcp-origin-pills';
+    const pillsTitle = document.createElement('span');
+    pillsTitle.className = 'ms-field__label';
+    pillsTitle.textContent = '🌐 当前使用的接入地址：';
+    pillsRow.append(pillsTitle);
+
+    for (const ch of choices) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `ms-btn ms-btn--xs ${origin === ch.url ? 'ms-btn--cyan' : ''}`;
+      btn.textContent = ch.label;
+      btn.onclick = () => {
+        this.selectedOrigin = ch.url;
+        localStorage.setItem(ORIGIN_PREF_KEY, ch.url);
+        this.render();
+      };
+      pillsRow.append(btn);
+    }
+    originBox.append(pillsRow);
+
+    const customRow = document.createElement('div');
+    customRow.className = 'ms-mcp-origin-custom';
+    const customInput = document.createElement('input');
+    customInput.type = 'text';
+    customInput.className = 'ms-input ms-input--xs';
+    customInput.placeholder = `宿主机内网 IP / 地址，如 192.168.1.88:${portHint}`;
+    customInput.value = this.customLan;
+
+    const applyCustom = () => {
+      const norm = normalizeCustomOrigin(customInput.value, portHint);
+      if (!norm) {
+        ctx.onToast('❌ 请输入有效的 IP 或地址（例如 192.168.1.88:4747）');
+        return;
+      }
+      this.customLan = norm;
+      this.selectedOrigin = norm;
+      localStorage.setItem(CUSTOM_LAN_KEY, norm);
+      localStorage.setItem(ORIGIN_PREF_KEY, norm);
+      this.render();
+      ctx.onToast(`✅ 已切换为内网接入地址：${norm}`);
+    };
+
+    customInput.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') applyCustom();
+    });
+
+    const saveCustomBtn = document.createElement('button');
+    saveCustomBtn.type = 'button';
+    saveCustomBtn.className = 'ms-btn ms-btn--xs ms-btn--primary';
+    saveCustomBtn.textContent = '保存并切换为 192 内网';
+    saveCustomBtn.onclick = applyCustom;
+
+    customRow.append(customInput, saveCustomBtn);
+    if (this.customLan) {
+      const clrBtn = document.createElement('button');
+      clrBtn.type = 'button';
+      clrBtn.className = 'ms-btn ms-btn--xs';
+      clrBtn.textContent = '清除自定义';
+      clrBtn.onclick = () => {
+        this.customLan = '';
+        if (this.selectedOrigin && !choices.some((c) => c.kind !== 'custom' && c.url === this.selectedOrigin)) {
+          this.selectedOrigin = '';
+          localStorage.removeItem(ORIGIN_PREF_KEY);
+        }
+        localStorage.removeItem(CUSTOM_LAN_KEY);
+        this.render();
+      };
+      customRow.append(clrBtn);
+    }
+    originBox.append(customRow);
+
+    if (ctx.endpoints.dockerInternalUrl && !hasLanCandidate) {
+      const dockerTip = document.createElement('div');
+      dockerTip.className = 'ms-muted';
+      dockerTip.innerHTML = `🐳 检测到 Docker 容器桥接网卡 <code>${ctx.endpoints.dockerInternalUrl}</code>（外部无法直连，已自动过滤）。请在上方填入宿主机 <code>192.168.x.x:${portHint}</code>，或在启动容器时设置环境变量 <code>-e HOST_IP=你的192内网IP</code>。`;
+      originBox.append(dockerTip);
+    }
+
     card.append(infoBar);
 
     // Tabs
@@ -273,7 +447,7 @@ export class McpModal {
       body.append(
         makeCopyBlock(
           'mcpServers 完整 JSON 配置（可直接手动复制到 .mcp.json / mcp_config.json / .cursor/mcp.json）',
-          `专属 URL 与令牌已内置。若客户端支持 Streamable HTTP（url 字段）或仅支持本地命令（command + args），二选一或同时保留均可：`,
+          `当前地址：${origin} · 专属 URL 与令牌已内置。若客户端支持 Streamable HTTP（url 字段）或仅支持本地命令（command + args），二选一或同时保留均可：`,
           mcpJson,
           9,
           '完整手动复制区',

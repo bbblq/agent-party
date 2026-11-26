@@ -40,7 +40,7 @@ import {
   onMapClipboardChange,
   saveMapClipboard,
 } from './clipboard-http-utils';
-import { McpModal } from './mcp-modal';
+import { McpModal, type StudioEndpointsInfo } from './mcp-modal';
 import {
   StudioCanvas,
   type CanvasToolSettings,
@@ -52,6 +52,7 @@ import './map-editor.css';
 const art: ArtModule = artModule;
 const DRAFTS_STORAGE_KEY = 'agent_party_map_studio_drafts_v2';
 const STUDIO_TOKEN_STORAGE_KEY = 'agent_party_map_studio_token_v2';
+const INSP_FLOAT_STORAGE_KEY = 'agent_party_map_studio_insp_float_v1';
 const MAX_HISTORY = 80;
 
 interface MapTabDraft {
@@ -96,9 +97,10 @@ export class MapStudioApp {
   // Optional MCP / Server Session (lazy, never touches live Office SSE)
   private sessionId = '';
   private studioToken = '';
-  private endpoints: { baseUrl: string; lanUrl: string | null } = {
+  private endpoints: StudioEndpointsInfo = {
     baseUrl: typeof location !== 'undefined' ? location.origin : 'http://127.0.0.1:4747',
     lanUrl: null,
+    lanUrls: [],
   };
   private presence: StudioMcpPresence = { connected: false, listening: false, lastSeenAt: 0, activeTaskId: null };
   private tasks: StudioTaskSummary[] = [];
@@ -140,9 +142,11 @@ export class MapStudioApp {
   private publishModalEl!: HTMLElement;
   private ioModalEl!: HTMLElement;
 
-  // Collapsible workspace panels for maximum canvas room
+  // Independent collapsible/floating workspace panels for fixed-height ergonomics
   private leftCollapsed = false;
-  private rightCollapsed = false;
+  private inspectorCollapsed = false;
+  private inspectorFloating = localStorage.getItem(INSP_FLOAT_STORAGE_KEY) === '1';
+  private layersCollapsed = false;
 
   // Layout containers
   private tabsBarEl!: HTMLElement;
@@ -157,7 +161,8 @@ export class MapStudioApp {
   private statusLeftEl!: HTMLElement;
   private statusRightEl!: HTMLElement;
   private expandLeftBtn!: HTMLButtonElement;
-  private expandRightBtn!: HTMLButtonElement;
+  private expandInspectorBtn!: HTMLButtonElement;
+  private expandLayersBtn!: HTMLButtonElement;
   private toastEl!: HTMLElement;
   private workspaceEl!: HTMLElement;
   private refFileInput!: HTMLInputElement;
@@ -425,20 +430,33 @@ export class MapStudioApp {
     this.expandLeftBtn.hidden = true;
     this.expandLeftBtn.onclick = () => this.toggleLeftPanel(false);
 
-    this.expandRightBtn = document.createElement('button');
-    this.expandRightBtn.type = 'button';
-    this.expandRightBtn.className = 'ms-btn ms-btn--xs ms-expand-pill is-right';
-    this.expandRightBtn.textContent = '◀ 属性/图层';
-    this.expandRightBtn.title = '展开右侧属性与图层面板 (Tab)';
-    this.expandRightBtn.hidden = true;
-    this.expandRightBtn.onclick = () => this.toggleRightPanel(false);
+    const expandRightGroup = document.createElement('div');
+    expandRightGroup.className = 'ms-expand-group-right';
+
+    this.expandInspectorBtn = document.createElement('button');
+    this.expandInspectorBtn.type = 'button';
+    this.expandInspectorBtn.className = 'ms-btn ms-btn--xs ms-expand-pill';
+    this.expandInspectorBtn.textContent = '◀ 属性';
+    this.expandInspectorBtn.title = '展开属性检查器';
+    this.expandInspectorBtn.hidden = true;
+    this.expandInspectorBtn.onclick = () => this.toggleInspectorPanel(false);
+
+    this.expandLayersBtn = document.createElement('button');
+    this.expandLayersBtn.type = 'button';
+    this.expandLayersBtn.className = 'ms-btn ms-btn--xs ms-expand-pill';
+    this.expandLayersBtn.textContent = '◀ 图层';
+    this.expandLayersBtn.title = '展开图层与分组面板';
+    this.expandLayersBtn.hidden = true;
+    this.expandLayersBtn.onclick = () => this.toggleLayersPanel(false);
+
+    expandRightGroup.append(this.expandInspectorBtn, this.expandLayersBtn);
 
     const canvasWrap = document.createElement('div');
     canvasWrap.className = 'ms-canvas-wrap';
     canvasWrap.append(
       this.refHudEl,
       this.expandLeftBtn,
-      this.expandRightBtn,
+      expandRightGroup,
       this.canvasEngine.root,
       this.aiBarEl,
       this.statusLeftEl,
@@ -446,16 +464,14 @@ export class MapStudioApp {
     );
     centerArea.append(canvasWrap);
 
-    // Right: Inspector (top, pure element/group only!) + Layers & Groups (bottom)
-    const rightArea = document.createElement('aside');
-    rightArea.className = 'ms-right-dock';
-    this.inspectorEl = document.createElement('section');
-    this.inspectorEl.className = 'ms-inspector';
-    this.layersEl = document.createElement('section');
-    this.layersEl.className = 'ms-layers';
-    rightArea.append(this.inspectorEl, this.layersEl);
+    // Separate Fixed-Height Right Docks: Inspector & Layers/Groups
+    this.inspectorEl = document.createElement('aside');
+    this.inspectorEl.className = 'ms-inspector-dock';
+    this.layersEl = document.createElement('aside');
+    this.layersEl.className = 'ms-layers-dock';
 
-    this.workspaceEl.append(leftArea, centerArea, rightArea);
+    this.workspaceEl.append(leftArea, centerArea, this.inspectorEl, this.layersEl);
+    this.syncWorkspaceColumns();
 
     // 5. Hidden file inputs + Toast + Modals
     this.refFileInput = document.createElement('input');
@@ -728,19 +744,43 @@ export class MapStudioApp {
     this.toast(`🎨 已从百科选用：${e.name} (${e.id})`);
   }
 
-  private toggleLeftPanel(collapsed = !this.leftCollapsed): void {
-    this.leftCollapsed = collapsed;
-    this.workspaceEl.classList.toggle('is-left-collapsed', collapsed);
-    this.paletteDockEl.hidden = collapsed;
-    this.expandLeftBtn.hidden = !collapsed;
+  private syncWorkspaceColumns(): void {
+    this.workspaceEl.style.setProperty('--ms-col-left', this.leftCollapsed ? '52px' : '316px');
+    this.workspaceEl.style.setProperty(
+      '--ms-col-insp',
+      this.inspectorCollapsed || this.inspectorFloating ? '0px' : '272px',
+    );
+    this.workspaceEl.style.setProperty('--ms-col-layers', this.layersCollapsed ? '0px' : '284px');
+    this.paletteDockEl.hidden = this.leftCollapsed;
+    this.inspectorEl.hidden = this.inspectorCollapsed;
+    this.inspectorEl.classList.toggle('is-floating', !this.inspectorCollapsed && this.inspectorFloating);
+    this.layersEl.hidden = this.layersCollapsed;
+    this.expandLeftBtn.hidden = !this.leftCollapsed;
+    this.expandInspectorBtn.hidden = !this.inspectorCollapsed;
+    this.expandLayersBtn.hidden = !this.layersCollapsed;
     requestAnimationFrame(() => this.canvasEngine.requestRender());
   }
 
-  private toggleRightPanel(collapsed = !this.rightCollapsed): void {
-    this.rightCollapsed = collapsed;
-    this.workspaceEl.classList.toggle('is-right-collapsed', collapsed);
-    this.expandRightBtn.hidden = !collapsed;
-    requestAnimationFrame(() => this.canvasEngine.requestRender());
+  private toggleLeftPanel(collapsed = !this.leftCollapsed): void {
+    this.leftCollapsed = collapsed;
+    this.syncWorkspaceColumns();
+  }
+
+  private toggleInspectorPanel(collapsed = !this.inspectorCollapsed): void {
+    this.inspectorCollapsed = collapsed;
+    this.syncWorkspaceColumns();
+  }
+
+  private toggleInspectorFloat(floating = !this.inspectorFloating): void {
+    this.inspectorFloating = floating;
+    localStorage.setItem(INSP_FLOAT_STORAGE_KEY, floating ? '1' : '0');
+    this.syncWorkspaceColumns();
+    this.renderInspector();
+  }
+
+  private toggleLayersPanel(collapsed = !this.layersCollapsed): void {
+    this.layersCollapsed = collapsed;
+    this.syncWorkspaceColumns();
   }
 
   // ------------------------------------------------------------------ Tools & Options Strip
@@ -1248,8 +1288,17 @@ export class MapStudioApp {
     const head = document.createElement('div');
     head.className = 'ms-panel-head';
     head.innerHTML = `<span>🔍 属性检查器</span>`;
-    const collapseBtn = this.makeMiniBtn('收起 ▶', () => this.toggleRightPanel(true), '', '收起右侧属性与图层面板 (Tab)');
-    head.append(collapseBtn);
+    const headBtns = document.createElement('div');
+    headBtns.className = 'ms-panel-head__btns';
+    const floatBtn = this.makeMiniBtn(
+      this.inspectorFloating ? '📌 停靠' : '🪟 悬浮',
+      () => this.toggleInspectorFloat(!this.inspectorFloating),
+      this.inspectorFloating ? 'ms-btn--cyan' : '',
+      '在独立固定分栏与画布悬浮窗之间切换',
+    );
+    const collapseBtn = this.makeMiniBtn('收起 ▶', () => this.toggleInspectorPanel(true), '', '独立收起属性检查器');
+    headBtns.append(floatBtn, collapseBtn);
+    head.append(headBtns);
     el.append(head);
 
     const body = document.createElement('div');
@@ -1548,6 +1597,7 @@ export class MapStudioApp {
     const head = document.createElement('div');
     head.className = 'ms-panel-head';
     head.innerHTML = `<span>🗂️ 图层与分组</span>`;
+    head.append(this.makeMiniBtn('收起 ▶', () => this.toggleLayersPanel(true), '', '独立收起图层与分组面板'));
     el.append(head);
 
     const toolbar = document.createElement('div');
@@ -2405,7 +2455,7 @@ export class MapStudioApp {
         studioToken: string;
         presence?: StudioMcpPresence;
         tasks?: StudioTaskSummary[];
-        endpoints?: { baseUrl: string; lanUrl: string | null };
+        endpoints?: StudioEndpointsInfo;
       };
       this.sessionId = data.sessionId;
       this.studioToken = data.studioToken;
@@ -2617,9 +2667,10 @@ export class MapStudioApp {
 
       if (ev.key === 'Tab') {
         ev.preventDefault();
-        const bothCollapsed = this.leftCollapsed && this.rightCollapsed;
-        this.toggleLeftPanel(!bothCollapsed);
-        this.toggleRightPanel(!bothCollapsed);
+        const allCollapsed = this.leftCollapsed && this.inspectorCollapsed && this.layersCollapsed;
+        this.toggleLeftPanel(!allCollapsed);
+        this.toggleInspectorPanel(!allCollapsed);
+        this.toggleLayersPanel(!allCollapsed);
         return;
       }
 
